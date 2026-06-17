@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { listProperties } from '../api'
+import { deleteProperty, listProperties } from '../api'
 import FilterBar, { paramsToQuery } from '../components/FilterBar'
 import AddPropertyBar from '../components/AddPropertyBar'
 
@@ -20,6 +20,15 @@ export default function ListView() {
 
   useEffect(load, [params])
 
+  const remove = async (p, e) => {
+    e.preventDefault()
+    e.stopPropagation()
+    const label = p.address || `property #${p.id}`
+    if (!confirm(`Delete ${label} permanently? This cannot be undone.`)) return
+    await deleteProperty(p.id)
+    load()
+  }
+
   return (
     <div>
       <AddPropertyBar onChange={load} />
@@ -31,7 +40,7 @@ export default function ListView() {
           <thead>
             <tr>
               <th>Address</th><th>City</th><th>Price</th><th>Beds</th>
-              <th>Baths</th><th>Sqft</th><th>Status</th><th>Tags</th>
+              <th>Baths</th><th>Sqft</th><th>Status</th><th>Tags</th><th></th>
             </tr>
           </thead>
           <tbody>
@@ -45,10 +54,11 @@ export default function ListView() {
                 <td>{p.sqft ?? '—'}</td>
                 <td><span className={`badge ${p.status}`}>{p.status?.replace('_', ' ')}</span></td>
                 <td>{p.tags?.map((t) => <span key={t.id} className="tag sm">{t.name}</span>)}</td>
+                <td><button className="link-btn danger" onClick={(e) => remove(p, e)}>delete</button></td>
               </tr>
             ))}
             {rows.length === 0 && (
-              <tr><td colSpan={8} className="muted">No properties match.</td></tr>
+              <tr><td colSpan={9} className="muted">No properties match.</td></tr>
             )}
           </tbody>
         </table>

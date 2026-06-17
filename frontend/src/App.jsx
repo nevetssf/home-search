@@ -11,6 +11,7 @@ export default function App() {
           <NavLink to="/" end>List</NavLink>
           <NavLink to="/map">Map</NavLink>
           <NavLink to="/criteria">Criteria</NavLink>
+          <NavLink to="/settings">Settings</NavLink>
         </nav>
         <span className="spacer" />
         <NavLink to="/settings" className="who">{user?.name}</NavLink>
