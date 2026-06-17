@@ -8,6 +8,7 @@ from ..auth import (
     create_access_token,
     get_current_user,
     get_password_hash,
+    verify_password,
 )
 from ..database import get_db
 from ..models import User
@@ -55,3 +56,32 @@ def create_user(
     db.commit()
     db.refresh(user)
     return user
+
+
+@router.patch("/me/password", status_code=204)
+def change_password(
+    payload: schemas.PasswordChange,
+    db: Session = Depends(get_db),
+    current: User = Depends(get_current_user),
+):
+    """Change the current user's own password (verifies the current one first)."""
+    if not verify_password(payload.current_password, current.hashed_password):
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+    current.hashed_password = get_password_hash(payload.new_password)
+    db.commit()
+
+
+@router.delete("/users/{user_id}", status_code=204)
+def delete_user(
+    user_id: int,
+    db: Session = Depends(get_db),
+    current: User = Depends(get_current_user),
+):
+    """Delete a household user. Self-deletion is blocked to avoid lockout."""
+    if user_id == current.id:
+        raise HTTPException(status_code=400, detail="You cannot delete your own account")
+    user = db.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    db.delete(user)
+    db.commit()

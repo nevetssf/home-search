@@ -8,6 +8,7 @@ import ListView from './pages/ListView'
 import MapView from './pages/MapView'
 import Detail from './pages/Detail'
 import CriteriaAdmin from './pages/CriteriaAdmin'
+import Settings from './pages/Settings'
 import './styles.css'
 
 function RequireAuth({ children }) {
@@ -34,6 +35,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
             <Route path="map" element={<MapView />} />
             <Route path="property/:id" element={<Detail />} />
             <Route path="criteria" element={<CriteriaAdmin />} />
+            <Route path="settings" element={<Settings />} />
           </Route>
         </Routes>
       </AuthProvider>

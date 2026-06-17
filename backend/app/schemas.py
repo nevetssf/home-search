@@ -42,6 +42,11 @@ class UserOut(BaseModel):
     created_at: datetime
 
 
+class PasswordChange(BaseModel):
+    current_password: str
+    new_password: str = Field(min_length=6)
+
+
 # ── Tags ─────────────────────────────────────────────────────────────────────
 class TagCreate(BaseModel):
     name: str

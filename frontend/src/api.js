@@ -27,6 +27,11 @@ api.interceptors.response.use(
 export const login = (email, password) =>
   api.post('/auth/login', { email, password }).then((r) => r.data)
 export const getMe = () => api.get('/auth/me').then((r) => r.data)
+export const listUsers = () => api.get('/auth/users').then((r) => r.data)
+export const createUser = (body) => api.post('/auth/users', body).then((r) => r.data)
+export const deleteUser = (id) => api.delete(`/auth/users/${id}`)
+export const changePassword = (current_password, new_password) =>
+  api.patch('/auth/me/password', { current_password, new_password })
 
 // ── Properties ────────────────────────────────────────────────────────────────
 export const listProperties = (params) =>
