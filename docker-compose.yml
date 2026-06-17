@@ -1,0 +1,33 @@
+# home-search — boulder-server deployment (PLAN.md §9).
+# Private app over Tailscale; do NOT enable Tailscale Funnel while serving
+# cached listing photos. The backend mem_limit keeps it from starving the
+# other ~13 containers on the N5105 host.
+
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - home-search-data:/app/data
+    environment:
+      - DATABASE_URL=sqlite:////app/data/home_search.db
+      - MEDIA_ROOT=/app/data/media
+    env_file:
+      - ./.env
+    mem_limit: 1g
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - VITE_API_URL=http://localhost:8000
+    depends_on:
+      - backend
+    mem_limit: 512m
+    restart: unless-stopped
+
+volumes:
+  home-search-data:

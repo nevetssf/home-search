@@ -1,0 +1,10 @@
+[Unit]
+Description=home-search nightly backup (restic → both Synology NAS)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Adjust WorkingDirectory to the clone location on boulder-server.
+WorkingDirectory=/srv/home-search
+ExecStart=/srv/home-search/ops/backup.sh

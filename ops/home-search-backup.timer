@@ -1,0 +1,11 @@
+[Unit]
+Description=Run home-search backup nightly
+
+[Timer]
+# 02:30 daily, with a randomized delay and catch-up if the machine was asleep.
+OnCalendar=*-*-* 02:30:00
+RandomizedDelaySec=900
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# Env / secrets
+.env
+backend/.env
+ops/restic.env
+*.key
+
+# Databases & snapshots
+*.db
+*.db-wal
+*.db-shm
+snapshot.db
+
+# Media (user-uploaded + cached promo photos)
+backend/media/
+media/
+
+# Node / frontend
+node_modules/
+frontend/dist/
+.vite/
+
+# OS
+.DS_Store
