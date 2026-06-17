@@ -27,6 +27,11 @@ api.interceptors.response.use(
 export const login = (email, password) =>
   api.post('/auth/login', { email, password }).then((r) => r.data)
 export const getMe = () => api.get('/auth/me').then((r) => r.data)
+export const listUsers = () => api.get('/auth/users').then((r) => r.data)
+export const createUser = (body) => api.post('/auth/users', body).then((r) => r.data)
+export const deleteUser = (id) => api.delete(`/auth/users/${id}`)
+export const changePassword = (current_password, new_password) =>
+  api.patch('/auth/me/password', { current_password, new_password })
 
 // ── Properties ────────────────────────────────────────────────────────────────
 export const listProperties = (params) =>
@@ -86,8 +91,10 @@ export const listPois = () => api.get('/pois').then((r) => r.data)
 export const createPoi = (body) => api.post('/pois', body).then((r) => r.data)
 
 // ── Ingestion ──────────────────────────────────────────────────────────────────
-export const ingestZillowUrl = (url) =>
-  api.post('/ingest/zillow/url', { url }).then((r) => r.data)
+// Unified: backend detects Zillow vs Redfin and scrapes the page directly
+// (RapidAPI fallback for Zillow if a key is set).
+export const ingestUrl = (url) =>
+  api.post('/ingest/url', { url }).then((r) => r.data)
 export const ingestRedfinCsv = (file) => {
   const fd = new FormData()
   fd.append('file', file)

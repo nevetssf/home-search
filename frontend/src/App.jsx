@@ -11,9 +11,10 @@ export default function App() {
           <NavLink to="/" end>List</NavLink>
           <NavLink to="/map">Map</NavLink>
           <NavLink to="/criteria">Criteria</NavLink>
+          <NavLink to="/settings">Settings</NavLink>
         </nav>
         <span className="spacer" />
-        <span className="who">{user?.name}</span>
+        <NavLink to="/settings" className="who">{user?.name}</NavLink>
         <button className="link-btn" onClick={signOut}>Sign out</button>
       </header>
       <main className="content">

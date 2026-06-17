@@ -16,7 +16,8 @@ from .. import schemas
 from ..auth import get_current_user
 from ..database import get_db
 from ..models import Media, Property, StatusHistory, User
-from ..services import redfin_csv
+from ..services import redfin_csv, scrape
+from ..services.scrape import ScrapeBlocked
 from ..services.storage import get_storage, make_key
 from ..services.zillow import (
     NormalizedListing,
@@ -26,6 +27,28 @@ from ..services.zillow import (
 )
 
 router = APIRouter(prefix="/ingest", tags=["ingest"])
+
+
+def _resolve_zillow_listing(url: str) -> NormalizedListing:
+    """Direct scrape first; fall back to the RapidAPI wrapper if a key is set
+    (PLAN.md §6 — keeps cost $0 by default, reliable when a key is present)."""
+    try:
+        return scrape.scrape_zillow(url)
+    except ScrapeBlocked as scrape_err:
+        client = ZillowClient()
+        if not client.api_key:
+            # No fallback available — surface the scrape failure to the caller.
+            raise HTTPException(
+                502,
+                f"Could not scrape Zillow ({scrape_err}); set RAPIDAPI_KEY for a "
+                "reliable fallback, or add the property manually.",
+            )
+        try:
+            listing = normalize(client.fetch_by_url(url))
+            listing.source_url = listing.source_url or url
+            return listing
+        except ZillowUnavailable as api_err:
+            raise HTTPException(502, f"Zillow scrape and API both failed: {api_err}")
 
 _LISTING_FIELDS = (
     "address city state zip county latitude longitude price beds baths sqft "
@@ -99,6 +122,38 @@ def _upsert(
     return prop, created
 
 
+def _ingest_one(db: Session, source: str, listing: NormalizedListing, download: bool):
+    prop, created = _upsert(db, source, listing, download)
+    db.commit()
+    return schemas.IngestResult(
+        created=int(created), updated=int(not created), property_ids=[prop.id]
+    )
+
+
+@router.post("/url", response_model=schemas.IngestResult)
+def ingest_url(
+    payload: schemas.ZillowURLIngest,
+    download_photos: bool = True,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    """Unified entry: detect Zillow vs Redfin from the URL and ingest. Scrapes
+    the page directly (no API key required); Zillow falls back to RapidAPI if a
+    key is configured, and to manual entry if everything fails."""
+    source = scrape.detect_source(payload.url)
+    if source == "zillow":
+        listing = _resolve_zillow_listing(payload.url)
+    elif source == "redfin":
+        try:
+            listing = scrape.scrape_redfin(payload.url)
+        except ScrapeBlocked as e:
+            raise HTTPException(502, f"Could not scrape Redfin ({e}); add manually.")
+    else:
+        raise HTTPException(400, "URL must be a zillow.com or redfin.com listing")
+    listing.source_url = listing.source_url or payload.url
+    return _ingest_one(db, source, listing, download_photos)
+
+
 @router.post("/zillow/url", response_model=schemas.IngestResult)
 def ingest_zillow_url(
     payload: schemas.ZillowURLIngest,
@@ -106,21 +161,24 @@ def ingest_zillow_url(
     db: Session = Depends(get_db),
     _: User = Depends(get_current_user),
 ):
-    client = ZillowClient()
+    listing = _resolve_zillow_listing(payload.url)
+    listing.source_url = listing.source_url or payload.url
+    return _ingest_one(db, "zillow", listing, download_photos)
+
+
+@router.post("/redfin/url", response_model=schemas.IngestResult)
+def ingest_redfin_url(
+    payload: schemas.ZillowURLIngest,
+    download_photos: bool = True,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
     try:
-        raw = client.fetch_by_url(payload.url)
-    except ZillowUnavailable as e:
-        raise HTTPException(503, str(e))
-    listing = normalize(raw)
-    if not listing.source_url:
-        listing.source_url = payload.url
-    prop, created = _upsert(db, "zillow", listing, download_photos)
-    db.commit()
-    return schemas.IngestResult(
-        created=int(created),
-        updated=int(not created),
-        property_ids=[prop.id],
-    )
+        listing = scrape.scrape_redfin(payload.url)
+    except ScrapeBlocked as e:
+        raise HTTPException(502, f"Could not scrape Redfin ({e}); add manually.")
+    listing.source_url = listing.source_url or payload.url
+    return _ingest_one(db, "redfin", listing, download_photos)
 
 
 @router.post("/zillow/search", response_model=schemas.IngestResult)

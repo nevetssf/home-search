@@ -83,17 +83,34 @@ def normalize(payload: Dict[str, Any]) -> NormalizedListing:
         state = addr.get("state")
         zipc = addr.get("zipcode")
     else:
-        street = addr if isinstance(addr, str) else None
+        # Flat shape (used by the page's gdpClientCache property object).
+        street = (
+            (addr if isinstance(addr, str) else None)
+            or payload.get("streetAddress")
+            or payload.get("abbreviatedAddress")
+        )
         city = payload.get("city")
         state = payload.get("state")
         zipc = payload.get("zipcode")
 
     photos: List[str] = []
-    for p in payload.get("photos", []) or []:
+    # Detail pages carry photos under several keys depending on the render path.
+    photo_blobs = (
+        payload.get("photos")
+        or payload.get("responsivePhotos")
+        or payload.get("originalPhotos")
+        or []
+    )
+    for p in photo_blobs:
         if isinstance(p, str):
             photos.append(p)
         elif isinstance(p, dict):
             url = p.get("url") or p.get("href")
+            # responsivePhotos nest the url under mixedSources/jpeg[].url
+            if not url:
+                jpeg = (p.get("mixedSources") or {}).get("jpeg")
+                if isinstance(jpeg, list) and jpeg:
+                    url = jpeg[-1].get("url")
             if url:
                 photos.append(url)
     if not photos and payload.get("imgSrc"):

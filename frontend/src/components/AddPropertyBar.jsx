@@ -2,7 +2,7 @@
 // property manually. Manual entry is the graceful fallback (PLAN.md §6).
 import { useNavigate } from 'react-router-dom'
 import { useState } from 'react'
-import { createProperty, ingestRedfinCsv, ingestZillowUrl } from '../api'
+import { createProperty, ingestRedfinCsv, ingestUrl } from '../api'
 
 export default function AddPropertyBar({ onChange }) {
   const nav = useNavigate()
@@ -10,19 +10,22 @@ export default function AddPropertyBar({ onChange }) {
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
 
-  const addZillow = async (e) => {
+  const addFromUrl = async (e) => {
     e.preventDefault()
     if (!url) return
     setBusy(true); setMsg('')
     try {
-      const res = await ingestZillowUrl(url)
+      const res = await ingestUrl(url)
       setUrl('')
       onChange?.()
       if (res.property_ids?.[0]) nav(`/property/${res.property_ids[0]}`)
     } catch (err) {
-      setMsg(err.response?.status === 503
-        ? 'Zillow API key not configured — add manually instead.'
-        : 'Could not fetch that listing.')
+      const status = err.response?.status
+      setMsg(
+        status === 400 ? 'Paste a zillow.com or redfin.com listing URL.'
+        : status === 502 ? 'Site blocked the fetch (try from your home network) — or add manually.'
+        : 'Could not fetch that listing.'
+      )
     } finally {
       setBusy(false)
     }
@@ -51,12 +54,12 @@ export default function AddPropertyBar({ onChange }) {
 
   return (
     <div className="addbar">
-      <form onSubmit={addZillow} className="addbar-zillow">
+      <form onSubmit={addFromUrl} className="addbar-zillow">
         <input
-          placeholder="Paste a Zillow listing URL…" value={url}
+          placeholder="Paste a Zillow or Redfin listing URL…" value={url}
           onChange={(e) => setUrl(e.target.value)}
         />
-        <button disabled={busy} type="submit">Add from Zillow</button>
+        <button disabled={busy} type="submit">{busy ? 'Fetching…' : 'Add from URL'}</button>
       </form>
       <label className="filelabel">
         Import Redfin CSV

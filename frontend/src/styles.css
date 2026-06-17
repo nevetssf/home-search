@@ -101,6 +101,15 @@ button { cursor: pointer; }
 .notes, .timeline { list-style: none; padding: 0; margin: 10px 0 0; }
 .notes li, .timeline li { padding: 4px 0; border-bottom: 1px solid var(--line); }
 
+/* ── Settings ── */
+.settings { max-width: 640px; }
+.stack { display: flex; flex-direction: column; gap: 8px; max-width: 320px; }
+.stack input, .stack button { padding: 8px; }
+.ok-msg { color: #2e7d32; font-size: 0.9em; }
+.settings h4 { margin: 16px 0 6px; color: var(--muted); font-size: 0.85em; text-transform: uppercase; }
+.who { color: var(--muted); }
+.who.active { font-weight: 600; }
+
 /* ── Criteria admin form ── */
 .crit-form { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .crit-form input, .crit-form select { padding: 6px; }
