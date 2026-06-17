@@ -91,8 +91,10 @@ export const listPois = () => api.get('/pois').then((r) => r.data)
 export const createPoi = (body) => api.post('/pois', body).then((r) => r.data)
 
 // ── Ingestion ──────────────────────────────────────────────────────────────────
-export const ingestZillowUrl = (url) =>
-  api.post('/ingest/zillow/url', { url }).then((r) => r.data)
+// Unified: backend detects Zillow vs Redfin and scrapes the page directly
+// (RapidAPI fallback for Zillow if a key is set).
+export const ingestUrl = (url) =>
+  api.post('/ingest/url', { url }).then((r) => r.data)
 export const ingestRedfinCsv = (file) => {
   const fd = new FormData()
   fd.append('file', file)
