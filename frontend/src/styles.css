@@ -63,6 +63,13 @@ button { cursor: pointer; }
 .grid.sm td, .grid.sm th { padding: 4px 8px; font-size: 0.9em; }
 .grid tr.inactive { opacity: 0.5; }
 
+/* sortable headers + per-column filter row */
+.table-scroll { overflow-x: auto; }
+.grid th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+.grid th.sortable:hover { color: var(--ink); }
+.grid .filter-row th { background: #fff; padding: 4px 6px; }
+.grid .filter-row input { width: 100%; min-width: 70px; padding: 3px 5px; font-size: 0.85em; box-sizing: border-box; }
+
 .badge { padding: 2px 8px; border-radius: 10px; font-size: 0.78em; color: #fff; text-transform: capitalize; }
 .badge.for_sale { background: #2e7d32; }
 .badge.pending { background: #f9a825; color: #000; }
