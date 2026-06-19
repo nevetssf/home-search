@@ -104,5 +104,8 @@ export const ingestRedfinCsv = (file) => {
 // subset of {location, listing_type, radius, beds_min, price_min, price_max}.
 export const ingestRealtorSearch = (params) =>
   api.post('/ingest/realtor/search', params).then((r) => r.data)
+// Search the listing source within map-drawn region(s). shapes: [{kind, ...}].
+export const searchRegion = (shapes, opts = {}) =>
+  api.post('/ingest/region', { shapes, ...opts }).then((r) => r.data)
 
 export default api

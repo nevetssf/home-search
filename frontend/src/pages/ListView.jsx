@@ -3,6 +3,8 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { deleteProperty, listCriteria, listProperties } from '../api'
 import FilterBar, { paramsToQuery } from '../components/FilterBar'
 import AddPropertyBar from '../components/AddPropertyBar'
+import { useRegions } from '../regions'
+import { inAnyShape } from '../geo'
 
 const fmtPrice = (p) => (p == null ? '—' : `$${Number(p).toLocaleString()}`)
 
@@ -49,6 +51,7 @@ export default function ListView() {
   const [loading, setLoading] = useState(true)
   const [sort, setSort] = useState({ key: 'created', dir: 1 })
   const [colFilters, setColFilters] = useState({}) // {colKey: text}
+  const { filter: filterRegions, setFilter: setFilterRegions } = useRegions()
 
   const load = () => {
     setLoading(true)
@@ -109,14 +112,22 @@ export default function ListView() {
     return [...base, ...crit, score]
   }, [criteria])
 
+  // Properties dropped purely by the map filter regions (for the banner count).
+  const regionFiltered = useMemo(
+    () => (filterRegions.length
+      ? rows.filter((p) => inAnyShape(filterRegions, p.latitude, p.longitude))
+      : rows),
+    [rows, filterRegions]
+  )
+
   const view = useMemo(() => {
-    let out = rows.filter((p) =>
+    let out = regionFiltered.filter((p) =>
       columns.every((c) => matches(c.get(p), colFilters[c.key] || '', c.type))
     )
     const col = columns.find((c) => c.key === sort.key)
     if (col) out = [...out].sort((a, b) => sort.dir * compare(col.get(a), col.get(b), col.type))
     return out
-  }, [rows, columns, colFilters, sort])
+  }, [regionFiltered, columns, colFilters, sort])
 
   const toggleSort = (key) =>
     setSort((s) => (s.key === key ? { key, dir: -s.dir } : { key, dir: 1 }))
@@ -127,6 +138,13 @@ export default function ListView() {
     <div>
       <AddPropertyBar onChange={load} />
       <FilterBar />
+      {filterRegions.length > 0 && (
+        <div className="region-filter-banner">
+          🗺️ Map filter active ({filterRegions.length} region{filterRegions.length > 1 ? 's' : ''}) —
+          showing {regionFiltered.length} of {rows.length} properties.
+          <button className="link-btn" onClick={() => setFilterRegions([])}>clear</button>
+        </div>
+      )}
       {loading ? (
         <p>Loading…</p>
       ) : (
