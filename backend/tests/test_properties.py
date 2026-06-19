@@ -68,6 +68,25 @@ def test_filter_by_tag(client, make_property):
     assert r.json()[0]["id"] == p1["id"]
 
 
+def test_edit_and_delete_note(client, make_property):
+    prop = make_property()
+    note = client.post(f"/properties/{prop['id']}/notes", json={"body": "first"}).json()
+
+    # edit
+    r = client.patch(f"/properties/{prop['id']}/notes/{note['id']}", json={"body": "edited"})
+    assert r.status_code == 200
+    assert r.json()["body"] == "edited"
+    assert client.get(f"/properties/{prop['id']}/notes").json()[0]["body"] == "edited"
+
+    # delete
+    assert client.delete(f"/properties/{prop['id']}/notes/{note['id']}").status_code == 204
+    assert client.get(f"/properties/{prop['id']}/notes").json() == []
+
+    # editing/deleting a missing note → 404
+    assert client.patch(f"/properties/{prop['id']}/notes/{note['id']}", json={"body": "x"}).status_code == 404
+    assert client.delete(f"/properties/{prop['id']}/notes/{note['id']}").status_code == 404
+
+
 def test_sort_desc(client, make_property):
     make_property(price=500000)
     make_property(price=900000)

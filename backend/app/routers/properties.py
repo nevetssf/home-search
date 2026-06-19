@@ -352,6 +352,23 @@ def add_note(
     return note
 
 
+@router.patch("/{property_id}/notes/{note_id}", response_model=schemas.NoteOut)
+def update_note(
+    property_id: int,
+    note_id: int,
+    payload: schemas.NoteCreate,
+    db: Session = Depends(get_db),
+    current: User = Depends(get_current_user),
+):
+    note = db.get(Note, note_id)
+    if not note or note.property_id != property_id:
+        raise HTTPException(404, "Note not found")
+    note.body = payload.body
+    db.commit()
+    db.refresh(note)
+    return note
+
+
 @router.delete("/{property_id}/notes/{note_id}", status_code=204)
 def delete_note(
     property_id: int,

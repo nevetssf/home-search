@@ -127,6 +127,8 @@ button { cursor: pointer; }
 .noteform textarea { width: 100%; min-height: 50px; padding: 6px; }
 .notes, .timeline { list-style: none; padding: 0; margin: 10px 0 0; }
 .notes li, .timeline li { padding: 4px 0; border-bottom: 1px solid var(--line); }
+.note-actions { float: right; display: inline-flex; gap: 2px; }
+.note-edit { width: 100%; min-height: 44px; padding: 6px; }
 
 /* ── Settings ── */
 .settings { max-width: 640px; }

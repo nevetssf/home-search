@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
-  addNote, deleteProperty, getDistances, getProperty,
-  refreshDistances, updateProperty,
+  addNote, deleteNote, deleteProperty, getDistances, getProperty,
+  refreshDistances, updateNote, updateProperty,
 } from '../api'
 import CriteriaPanel from '../components/CriteriaPanel'
 import MediaGallery from '../components/MediaGallery'
@@ -144,7 +144,7 @@ export default function Detail() {
             </form>
             <ul className="notes">
               {p.notes?.map((n) => (
-                <li key={n.id}>{n.body}<span className="muted"> · {new Date(n.created_at).toLocaleDateString()}</span></li>
+                <NoteItem key={n.id} note={n} propertyId={id} onChange={load} />
               ))}
             </ul>
           </section>
@@ -163,5 +163,46 @@ export default function Detail() {
         </div>
       </div>
     </div>
+  )
+}
+
+function NoteItem({ note, propertyId, onChange }) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(note.body)
+
+  const save = async () => {
+    const body = draft.trim()
+    if (!body) return
+    await updateNote(propertyId, note.id, body)
+    setEditing(false)
+    onChange()
+  }
+  const remove = async () => {
+    if (confirm('Delete this note?')) {
+      await deleteNote(propertyId, note.id)
+      onChange()
+    }
+  }
+
+  if (editing) {
+    return (
+      <li>
+        <textarea className="note-edit" value={draft} onChange={(e) => setDraft(e.target.value)} autoFocus />
+        <span className="note-actions">
+          <button className="link-btn" onClick={save}>save</button>
+          <button className="link-btn" onClick={() => { setDraft(note.body); setEditing(false) }}>cancel</button>
+        </span>
+      </li>
+    )
+  }
+  return (
+    <li>
+      {note.body}
+      <span className="muted"> · {new Date(note.created_at).toLocaleDateString()}</span>
+      <span className="note-actions">
+        <button className="link-btn" onClick={() => setEditing(true)}>edit</button>
+        <button className="link-btn danger" onClick={remove}>delete</button>
+      </span>
+    </li>
   )
 }

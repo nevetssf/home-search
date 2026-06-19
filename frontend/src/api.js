@@ -48,6 +48,10 @@ export const addNote = (id, body) =>
   api.post(`/properties/${id}/notes`, { body }).then((r) => r.data)
 export const listNotes = (id) =>
   api.get(`/properties/${id}/notes`).then((r) => r.data)
+export const updateNote = (id, noteId, body) =>
+  api.patch(`/properties/${id}/notes/${noteId}`, { body }).then((r) => r.data)
+export const deleteNote = (id, noteId) =>
+  api.delete(`/properties/${id}/notes/${noteId}`)
 
 // ── Tags ──────────────────────────────────────────────────────────────────────
 export const listTags = () => api.get('/tags').then((r) => r.data)
