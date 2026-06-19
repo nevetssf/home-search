@@ -21,7 +21,9 @@ A personal system for finding a second home: search an area against flexible cri
 
 ## Commands
 
-All verified. Backend (run from `backend/`, venv in `backend/.venv`):
+**Run the whole stack: `./dev.sh`** (repo root) — sets up the venv, installs deps when `requirements.txt`/`package.json` change, reconciles/applies migrations, and runs backend (:8000) + frontend (:3000); Ctrl+C stops both. macOS bash 3.2: it deliberately avoids `wait -n`, and reconciles a DB created by `init_db()`/`create_all` (schema present, no Alembic revision) by stamping head before `upgrade`.
+
+Backend by hand (run from `backend/`, venv in `backend/.venv`):
 
 ```bash
 source .venv/bin/activate
