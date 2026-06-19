@@ -64,6 +64,17 @@ def _baths(desc: Any) -> Optional[float]:
     return (full or 0) + (half or 0) * 0.5
 
 
+def _as_str(v: Any) -> Optional[str]:
+    """Coerce a value to a plain str for SQLite. HomeHarvest exposes enums
+    (e.g. PropertyType) that SQLite can't bind directly — prefer ``.value``."""
+    if v is None:
+        return None
+    if hasattr(v, "value") and not isinstance(v, str):
+        v = v.value
+    s = str(v)
+    return s or None
+
+
 def normalize(prop: Any) -> NormalizedListing:
     """Map a HomeHarvest ``Property`` model onto our schema (defensive)."""
     addr = getattr(prop, "address", None)
@@ -85,7 +96,7 @@ def normalize(prop: Any) -> NormalizedListing:
         sqft=_to_float(getattr(desc, "sqft", None)),
         lot_size=_to_float(getattr(desc, "lot_sqft", None)),
         year_built=int(desc.year_built) if getattr(desc, "year_built", None) else None,
-        property_type=getattr(desc, "style", None) or getattr(desc, "type", None),
+        property_type=_as_str(getattr(desc, "style", None) or getattr(desc, "type", None)),
         status=_STATUS_MAP.get(str(getattr(prop, "status", "") or "").upper(), "for_sale"),
         days_on_market=getattr(prop, "days_on_mls", None),
         description=getattr(desc, "text", None),

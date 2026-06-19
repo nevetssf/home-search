@@ -67,6 +67,23 @@ def test_normalize_maps_fields():
     assert n.photo_urls == ["http://img/primary.jpg", "http://img/2.jpg"]
 
 
+def test_normalize_coerces_enum_property_type_to_str():
+    """Regression: HomeHarvest exposes PropertyType as an Enum, which SQLite
+    can't bind. normalize() must yield a plain str (or None)."""
+    import enum
+
+    class PropertyType(enum.Enum):
+        SINGLE_FAMILY = "SINGLE_FAMILY"
+
+    n = normalize(_fake_prop(description=SimpleNamespace(
+        style=PropertyType.SINGLE_FAMILY, type=None, beds=3,
+        baths_full=2, baths_half=0, sqft=1800, year_built=2000,
+        primary_photo=None, alt_photos=None, text=None, lot_sqft=None,
+    )))
+    assert n.property_type == "SINGLE_FAMILY"
+    assert isinstance(n.property_type, str)
+
+
 def test_normalize_is_defensive_on_thin_prop():
     n = normalize(SimpleNamespace(property_id=5, property_url=None,
                                   address=None, description=None, status=None))

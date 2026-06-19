@@ -18,7 +18,7 @@ from ..auth import get_current_user
 from ..config import settings
 from ..database import get_db
 from ..models import Media, Property, StatusHistory, User
-from ..services import realtor, redfin_csv, scrape
+from ..services import geo, realtor, redfin_csv, scrape
 from ..services.realtor import RealtorUnavailable
 from ..services.scrape import ScrapeBlocked
 from ..services.storage import get_storage, make_key
@@ -319,6 +319,105 @@ def ingest_realtor_search(
         except Exception as e:  # one bad row shouldn't sink the batch
             out.errors.append(str(e)[:200])
     db.commit()
+    return out
+
+
+def _to_shape(s: schemas.RegionShape) -> geo.Shape:
+    """Validate a drawn region payload into a geo.Shape."""
+    if s.kind == "rectangle":
+        if not s.bbox or len(s.bbox) != 4:
+            raise HTTPException(400, "rectangle needs bbox=[min_lat,min_lng,max_lat,max_lng]")
+        return geo.Shape(kind="rectangle", bbox=tuple(s.bbox))
+    if s.kind == "circle":
+        if not s.center or len(s.center) != 2 or s.radius_mi is None:
+            raise HTTPException(400, "circle needs center=[lat,lng] and radius_mi")
+        return geo.Shape(kind="circle", center=tuple(s.center), radius_mi=s.radius_mi)
+    if s.kind == "polygon":
+        if not s.points or len(s.points) < 3:
+            raise HTTPException(400, "polygon needs >=3 points=[[lat,lng],...]")
+        return geo.Shape(kind="polygon", points=[tuple(p) for p in s.points])
+    raise HTTPException(400, f"unknown shape kind: {s.kind}")
+
+
+@router.post("/region", response_model=schemas.IngestResult)
+def ingest_region(
+    payload: schemas.RegionSearchIngest,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    """Search the listing source within map-drawn region(s) (PLAN.md §6, extended).
+
+    Bridges the drawn shape to area searches: ZIP centroids inside the shape →
+    unique cities (capped) → Realtor.com search each → filter the results to the
+    points actually inside the shape → upsert. Keyless (Realtor/HomeHarvest)."""
+    if not settings.realtor_enabled:
+        raise HTTPException(503, "Realtor ingestion is disabled (REALTOR_ENABLED=false)")
+    if not payload.shapes:
+        raise HTTPException(400, "draw at least one region")
+
+    shapes = [_to_shape(s) for s in payload.shapes]
+
+    # Collect the unique cities to search across all shapes (bounded).
+    cities: list[str] = []
+    seen_cities: set[str] = set()
+    capped = False
+    for shp in shapes:
+        cs, cap = geo.cities_in_shape(shp, max_cities=payload.max_cities)
+        capped = capped or cap
+        for c in cs:
+            if c not in seen_cities:
+                seen_cities.add(c)
+                cities.append(c)
+    cities = cities[: payload.max_cities]
+
+    out = schemas.IngestResult()
+    if not cities:
+        out.errors.append("No US ZIP centroids fall inside the region(s) drawn.")
+        return out
+
+    # Search each city once; dedupe listings by source_id across cities.
+    listings: dict = {}
+    for city in cities:
+        try:
+            for listing in realtor.search(
+                city,
+                listing_type=payload.listing_type,
+                beds_min=payload.beds_min,
+                price_min=payload.price_min,
+                price_max=payload.price_max,
+            ):
+                key = listing.source_id or f"{listing.address}|{listing.zip}"
+                listings.setdefault(key, listing)
+        except RealtorUnavailable as e:
+            raise HTTPException(503, str(e))
+        except Exception as e:  # one bad city shouldn't sink the batch
+            out.errors.append(f"{city}: {str(e)[:120]}")
+
+    # Keep only listings whose coordinates fall inside one of the drawn shapes.
+    for listing in listings.values():
+        if listing.latitude is None or listing.longitude is None:
+            out.skipped += 1
+            continue
+        if not any(geo.contains(s, listing.latitude, listing.longitude) for s in shapes):
+            out.skipped += 1
+            continue
+        try:
+            # Savepoint per listing: a bad row rolls back just itself and leaves
+            # the session usable, instead of poisoning the whole batch.
+            with db.begin_nested():
+                prop, created = _upsert(db, "realtor", listing, download=False)
+            out.property_ids.append(prop.id)
+            out.created += int(created)
+            out.updated += int(not created)
+        except Exception as e:
+            out.errors.append(str(e)[:120])
+    db.commit()
+
+    if capped:
+        out.errors.append(
+            f"Region covers more than {payload.max_cities} areas; searched the "
+            "closest/first ones. Draw smaller regions for full coverage."
+        )
     return out
 
 

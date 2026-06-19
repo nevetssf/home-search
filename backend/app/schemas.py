@@ -294,6 +294,27 @@ class RealtorSearchIngest(BaseModel):
     past_days: Optional[int] = None
 
 
+class RegionShape(BaseModel):
+    """A region drawn on the map. Coordinates are [lat, lng]."""
+
+    kind: str  # rectangle | circle | polygon
+    bbox: Optional[List[float]] = None         # rectangle: [min_lat,min_lng,max_lat,max_lng]
+    center: Optional[List[float]] = None       # circle: [lat, lng]
+    radius_mi: Optional[float] = None          # circle radius in miles
+    points: Optional[List[List[float]]] = None # polygon: [[lat,lng], ...]
+
+
+class RegionSearchIngest(BaseModel):
+    """Search the listing source(s) within map-drawn region(s)."""
+
+    shapes: List[RegionShape]
+    listing_type: str = "for_sale"
+    beds_min: Optional[int] = None
+    price_min: Optional[int] = None
+    price_max: Optional[int] = None
+    max_cities: int = 15  # cap area-searches to bound cost
+
+
 class IngestResult(BaseModel):
     created: int = 0
     updated: int = 0
