@@ -5,7 +5,9 @@ alembic==1.14.0
 python-dotenv==1.0.1
 httpx==0.27.2
 apscheduler==3.10.4
-pydantic[email]==2.9.2
+homeharvest==0.8.18  # Realtor.com ingestion (pure httpx, no headless browser); pulls in pandas/numpy
+pgeocode==0.4.1  # offline US ZIP -> city/state/centroid (Zillow URL slug reconstruction)
+pydantic[email]==2.13.4  # bumped from 2.9.2: homeharvest requires pydantic>=2.11.7
 pydantic-settings==2.6.0
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4

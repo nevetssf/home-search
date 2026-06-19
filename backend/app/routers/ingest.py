@@ -5,6 +5,7 @@ photos locally (persist + privacy), upsert by ``(source, source_id)``. Any API
 failure degrades to HTTP 503 / partial result so manual entry stays the
 graceful fallback.
 """
+import re
 from datetime import datetime
 from typing import Optional
 
@@ -14,9 +15,11 @@ from sqlalchemy.orm import Session
 
 from .. import schemas
 from ..auth import get_current_user
+from ..config import settings
 from ..database import get_db
 from ..models import Media, Property, StatusHistory, User
-from ..services import redfin_csv, scrape
+from ..services import realtor, redfin_csv, scrape
+from ..services.realtor import RealtorUnavailable
 from ..services.scrape import ScrapeBlocked
 from ..services.storage import get_storage, make_key
 from ..services.zillow import (
@@ -29,26 +32,79 @@ from ..services.zillow import (
 router = APIRouter(prefix="/ingest", tags=["ingest"])
 
 
-def _resolve_zillow_listing(url: str) -> NormalizedListing:
-    """Direct scrape first; fall back to the RapidAPI wrapper if a key is set
-    (PLAN.md §6 — keeps cost $0 by default, reliable when a key is present)."""
+def _house_number(s: Optional[str]) -> Optional[str]:
+    m = re.match(r"\s*(\d+)", s or "")
+    return m.group(1) if m else None
+
+
+def _zillow_realtor_match(parsed: dict) -> Optional[NormalizedListing]:
+    """Look the parsed Zillow address up on Realtor.com and return the listing
+    ONLY if zip + house number match — Realtor's geocoder otherwise returns a
+    silently-wrong nearby home (see the Redfin similar-homes bug)."""
+    if not (settings.realtor_enabled and parsed.get("street") and parsed.get("zip")):
+        return None
+    query = ", ".join(
+        p for p in (
+            parsed["street"],
+            parsed.get("city"),
+            f"{parsed.get('state') or ''} {parsed['zip']}".strip(),
+        ) if p
+    )
     try:
-        return scrape.scrape_zillow(url)
-    except ScrapeBlocked as scrape_err:
-        client = ZillowClient()
-        if not client.api_key:
-            # No fallback available — surface the scrape failure to the caller.
-            raise HTTPException(
-                502,
-                f"Could not scrape Zillow ({scrape_err}); set RAPIDAPI_KEY for a "
-                "reliable fallback, or add the property manually.",
-            )
+        candidates = realtor.search(location=query, radius=0, limit=8)
+    except RealtorUnavailable:
+        return None
+    want = _house_number(parsed["street"])
+    for c in candidates:
+        if want and c.zip == parsed["zip"] and _house_number(c.address) == want:
+            return c
+    return None
+
+
+def _resolve_zillow_listing(url: str) -> tuple[str, NormalizedListing]:
+    """Resolve a Zillow URL to (source, listing) with a graceful fallback chain
+    (PLAN.md §6). Zillow bot-walls direct fetches, so: direct scrape → RapidAPI
+    (if a key is set) → reconstruct from the URL slug, enriched from Realtor.com
+    when zip+house number match, else an accurate address-only stub. Never a
+    dead end, never silently-wrong data."""
+    # 1. Direct scrape (usually CAPTCHA-blocked, but free when it works).
+    try:
+        return "zillow", scrape.scrape_zillow(url)
+    except ScrapeBlocked:
+        pass
+    # 2. RapidAPI wrapper, if configured (reliable full data).
+    client = ZillowClient()
+    if client.api_key:
         try:
             listing = normalize(client.fetch_by_url(url))
             listing.source_url = listing.source_url or url
-            return listing
-        except ZillowUnavailable as api_err:
-            raise HTTPException(502, f"Zillow scrape and API both failed: {api_err}")
+            return "zillow", listing
+        except ZillowUnavailable:
+            pass
+    # 3. No key / blocked: rebuild from the URL slug (+ pgeocode city/coords).
+    parsed = scrape.parse_zillow_url(url)
+    if not parsed:
+        raise HTTPException(
+            502,
+            "Zillow blocked the fetch and the URL couldn't be parsed; set "
+            "RAPIDAPI_KEY, or add the property manually.",
+        )
+    match = _zillow_realtor_match(parsed)
+    if match:
+        match.source_url = url  # keep the Zillow link the user pasted
+        return "realtor", match
+    stub = NormalizedListing(
+        source_id=parsed["zpid"],
+        source_url=url,
+        address=parsed["street"],
+        city=parsed["city"],
+        state=parsed["state"],
+        zip=parsed["zip"],
+        latitude=parsed["lat"],
+        longitude=parsed["lng"],
+        raw={"_scraped": "zillow_url_slug", **parsed},
+    )
+    return "zillow", stub
 
 _LISTING_FIELDS = (
     "address city state zip county latitude longitude price beds baths sqft "
@@ -140,10 +196,11 @@ def ingest_url(
     """Unified entry: detect Zillow vs Redfin from the URL and ingest. Scrapes
     the page directly (no API key required); Zillow falls back to RapidAPI if a
     key is configured, and to manual entry if everything fails."""
-    source = scrape.detect_source(payload.url)
-    if source == "zillow":
-        listing = _resolve_zillow_listing(payload.url)
-    elif source == "redfin":
+    detected = scrape.detect_source(payload.url)
+    if detected == "zillow":
+        source, listing = _resolve_zillow_listing(payload.url)
+    elif detected == "redfin":
+        source = "redfin"
         try:
             listing = scrape.scrape_redfin(payload.url)
         except ScrapeBlocked as e:
@@ -161,9 +218,9 @@ def ingest_zillow_url(
     db: Session = Depends(get_db),
     _: User = Depends(get_current_user),
 ):
-    listing = _resolve_zillow_listing(payload.url)
+    source, listing = _resolve_zillow_listing(payload.url)
     listing.source_url = listing.source_url or payload.url
-    return _ingest_one(db, "zillow", listing, download_photos)
+    return _ingest_one(db, source, listing, download_photos)
 
 
 @router.post("/redfin/url", response_model=schemas.IngestResult)
@@ -213,6 +270,47 @@ def ingest_zillow_search(
     for raw in results:
         try:
             prop, created = _upsert(db, "zillow", normalize(raw), download_photos)
+            out.property_ids.append(prop.id)
+            if created:
+                out.created += 1
+            else:
+                out.updated += 1
+        except Exception as e:  # one bad row shouldn't sink the batch
+            out.errors.append(str(e)[:200])
+    db.commit()
+    return out
+
+
+@router.post("/realtor/search", response_model=schemas.IngestResult)
+def ingest_realtor_search(
+    payload: schemas.RealtorSearchIngest,
+    download_photos: bool = False,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    """Area/criteria search on Realtor.com (via HomeHarvest, no API key). Upserts
+    each result by ``(source='realtor', source_id)`` — the same house from
+    Zillow stays a separate row (cross-source dedup is future work)."""
+    try:
+        listings = realtor.search(
+            payload.location,
+            listing_type=payload.listing_type,
+            radius=payload.radius,
+            beds_min=payload.beds_min,
+            baths_min=payload.baths_min,
+            price_min=payload.price_min,
+            price_max=payload.price_max,
+            sqft_min=payload.sqft_min,
+            sqft_max=payload.sqft_max,
+            past_days=payload.past_days,
+        )
+    except RealtorUnavailable as e:
+        raise HTTPException(503, str(e))
+
+    out = schemas.IngestResult()
+    for listing in listings:
+        try:
+            prop, created = _upsert(db, "realtor", listing, download_photos)
             out.property_ids.append(prop.id)
             if created:
                 out.created += 1

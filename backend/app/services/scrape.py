@@ -19,10 +19,11 @@ from __future__ import annotations
 import json
 import re
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 import httpx
 
-from .zillow import NormalizedListing, _STATUS_MAP, _to_float
+from .zillow import NormalizedListing, _to_float
 
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
@@ -84,6 +85,21 @@ def _iter_jsonld(html: str):
                 yield item
 
 
+def _collect_image_urls(val) -> List[str]:
+    """Pull image URLs from a schema.org ``image`` value (str / ImageObject /
+    list of either)."""
+    out: List[str] = []
+    if isinstance(val, str):
+        out.append(val)
+    elif isinstance(val, dict):
+        if val.get("url"):
+            out.append(val["url"])
+    elif isinstance(val, list):
+        for x in val:
+            out.extend(_collect_image_urls(x))
+    return out
+
+
 def parse_jsonld(html: str) -> Dict[str, Any]:
     """Merge schema.org listing fields from any JSON-LD blocks on the page."""
     out: Dict[str, Any] = {}
@@ -112,11 +128,7 @@ def parse_jsonld(html: str) -> Dict[str, Any]:
             out.setdefault("beds", _to_float(item.get("numberOfBedrooms")))
         if item.get("numberOfBathroomsTotal") is not None:
             out.setdefault("baths", _to_float(item.get("numberOfBathroomsTotal")))
-        img = item.get("image")
-        if isinstance(img, str):
-            photos.append(img)
-        elif isinstance(img, list):
-            photos.extend(x for x in img if isinstance(x, str))
+        photos.extend(_collect_image_urls(item.get("image")))
         out.setdefault("description", item.get("description"))
     if photos:
         out["photos"] = list(dict.fromkeys(photos))  # de-dup, preserve order
@@ -176,34 +188,198 @@ def scrape_zillow(url: str) -> NormalizedListing:
     raise ScrapeBlocked("no listing data found in Zillow page")
 
 
+# Zillow bot-walls direct fetches, so we also support reconstructing the address
+# straight from the URL slug (which is reliable) — used as a no-API fallback.
+_ZPID_SLUG_RE = re.compile(r"/homedetails/([^/]+)/(\d+)_zpid")
+_nomi = None  # cached pgeocode Nominatim
+
+
+def _zip_lookup(zipc: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Resolve a US ZIP to city/state/centroid via pgeocode (offline). Returns
+    None if pgeocode is unavailable or the ZIP is unknown."""
+    if not zipc:
+        return None
+    global _nomi
+    try:
+        import math
+        import pgeocode
+    except ImportError:  # pragma: no cover - optional dependency
+        return None
+    if _nomi is None:
+        _nomi = pgeocode.Nominatim("us")
+    try:
+        rec = _nomi.query_postal_code(zipc)
+    except Exception:
+        return None
+
+    def _clean(v):
+        if v is None:
+            return None
+        if isinstance(v, float) and math.isnan(v):
+            return None
+        return v
+
+    place = _clean(getattr(rec, "place_name", None))
+    if place is None:
+        return None
+    lat = _clean(getattr(rec, "latitude", None))
+    lng = _clean(getattr(rec, "longitude", None))
+    state = _clean(getattr(rec, "state_code", None))
+    return {
+        "city": place,
+        "state": state if isinstance(state, str) else None,
+        "lat": float(lat) if lat is not None else None,
+        "lng": float(lng) if lng is not None else None,
+    }
+
+
+def parse_zillow_url(url: str) -> Optional[Dict[str, Any]]:
+    """Reconstruct address fields from a Zillow ``/homedetails/<slug>/<zpid>_zpid``
+    URL. The slug encodes ``<street>-<City Words>-<ST>-<zip>`` but doesn't delimit
+    street vs city, so we take ZIP+state from the slug and resolve the (possibly
+    multi-word) city + centroid from the ZIP, then strip the city words off the
+    tail to recover the street. Returns None if the URL isn't a listing URL."""
+    m = _ZPID_SLUG_RE.search(url)
+    if not m:
+        return None
+    slug, zpid = m.group(1), m.group(2)
+    tokens = [t for t in slug.split("-") if t]
+
+    zipc = state = None
+    if tokens and re.fullmatch(r"\d{5}", tokens[-1]):
+        zipc = tokens.pop()
+    if tokens and re.fullmatch(r"[A-Za-z]{2}", tokens[-1]):
+        state = tokens.pop().upper()
+
+    city = lat = lng = None
+    info = _zip_lookup(zipc)
+    if info:
+        city = info["city"]
+        state = state or info["state"]
+        lat, lng = info["lat"], info["lng"]
+        # Strip the (resolved) city words off the tail to leave just the street.
+        ct = [w.lower() for w in city.split()]
+        n = len(ct)
+        if n and len(tokens) >= n and [t.lower() for t in tokens[-n:]] == ct:
+            tokens = tokens[:-n]
+
+    return {
+        "zpid": zpid,
+        "street": " ".join(tokens) if tokens else None,
+        "city": city,
+        "state": state,
+        "zip": zipc,
+        "lat": lat,
+        "lng": lng,
+    }
+
+
 # ── Redfin ───────────────────────────────────────────────────────────────────
-def _redfin_status(html: str) -> str:
-    # Cheap status sniff from the page; defaults to for_sale.
-    lowered = html.lower()
-    for needle, status in (
-        ("\"pending\"", "pending"), ("contingent", "pending"),
-        ("\"sold\"", "sold"), ("recently sold", "sold"),
-        ("coming soon", "coming_soon"),
-    ):
-        if needle in lowered:
-            return status
-    return "for_sale"
-
-
+# A Redfin listing page embeds MANY JSON-LD blocks: the subject is the single
+# `RealEstateListing`, while the `SingleFamilyResidence` blocks are the
+# "similar homes" sidebar (a different address!). We must target the subject
+# block and never merge the sidebar in — that merge was the Santa-Rosa→SF bug.
 def _redfin_listing_id(url: str) -> Optional[str]:
     m = re.search(r"/home/(\d+)", url)
     return m.group(1) if m else None
 
 
+def _find_realestate_listing(html: str) -> Optional[Dict[str, Any]]:
+    for item in _iter_jsonld(html):
+        t = item.get("@type", "")
+        types = [t] if isinstance(t, str) else (t or [])
+        if any(str(x).lower() == "realestatelisting" for x in types):
+            return item
+    return None
+
+
+def _redfin_locality_from_url(url: str) -> Dict[str, Optional[str]]:
+    """Derive city/state/zip/street from the URL slug, e.g.
+    ``/CA/Santa-Rosa/7455-Foothill-Ranch-Rd-95404/home/2277302``."""
+    parts = [p for p in urlparse(url).path.split("/") if p]
+    out: Dict[str, Optional[str]] = {"city": None, "state": None, "zip": None, "street": None}
+    if len(parts) >= 3:
+        if len(parts[0]) == 2 and parts[0].isalpha():
+            out["state"] = parts[0].upper()
+        out["city"] = parts[1].replace("-", " ") or None
+        slug = parts[2]
+        m = re.search(r"-(\d{5})$", slug)
+        if m:
+            out["zip"] = m.group(1)
+            slug = slug[: m.start()]
+        out["street"] = slug.replace("-", " ") or None
+    return out
+
+
+def _redfin_status(listing_ld: Optional[Dict[str, Any]]) -> str:
+    """Derive status from the subject listing's offer availability (reliable),
+    not page text — the similar-homes sidebar contains "sold" and would
+    misclassify an active listing."""
+    if isinstance(listing_ld, dict):
+        offers = listing_ld.get("offers")
+        if isinstance(offers, dict):
+            avail = str(offers.get("availability", "")).lower()
+            if "soldout" in avail or "discontinued" in avail:
+                return "sold"
+            if "instock" in avail or "limited" in avail:
+                return "for_sale"
+    return "for_sale"
+
+
 def scrape_redfin(url: str) -> NormalizedListing:
-    """Direct-fetch a Redfin listing via its embedded JSON-LD structured data."""
+    """Direct-fetch a Redfin listing.
+
+    Uses the subject ``RealEstateListing`` JSON-LD block for street / price /
+    photos / description, and the URL slug for city / state / zip (those aren't
+    in that block). Enriches geo & beds/baths from a nested ``mainEntity`` when
+    present. Avoids the generic JSON-LD merge, which would grab a similar-home.
+    """
     html = fetch_html(url)
-    ld = parse_jsonld(html)
-    if not (ld.get("street") or ld.get("price") or ld.get("latitude")):
+    listing_ld = _find_realestate_listing(html)
+    if listing_ld is None:
+        raise ScrapeBlocked("no RealEstateListing data found in Redfin page")
+
+    loc = _redfin_locality_from_url(url)
+    offers = listing_ld.get("offers") if isinstance(listing_ld.get("offers"), dict) else {}
+    price = _to_float(offers.get("price"))
+    photos = _collect_image_urls(listing_ld.get("image"))
+
+    # Optional richer fields from a nested residence entity.
+    lat = lng = beds = baths = sqft = None
+    main = listing_ld.get("mainEntity")
+    if isinstance(main, dict):
+        geo = main.get("geo")
+        if isinstance(geo, dict):
+            lat = _to_float(geo.get("latitude"))
+            lng = _to_float(geo.get("longitude"))
+        beds = _to_float(main.get("numberOfBedrooms"))
+        baths = _to_float(main.get("numberOfBathroomsTotal"))
+        fs = main.get("floorSize")
+        if isinstance(fs, dict):
+            sqft = _to_float(fs.get("value"))
+
+    street = listing_ld.get("name") or loc["street"]
+    if not (street or price):
         raise ScrapeBlocked("no listing data found in Redfin page")
-    listing = _jsonld_to_listing(url, ld, _redfin_listing_id(url))
-    listing.status = _STATUS_MAP.get(_redfin_status(html).upper(), _redfin_status(html))
-    return listing
+
+    return NormalizedListing(
+        source_id=_redfin_listing_id(url),
+        source_url=listing_ld.get("url") or url,
+        address=street,
+        city=loc["city"],
+        state=loc["state"],
+        zip=loc["zip"],
+        latitude=lat,
+        longitude=lng,
+        price=price,
+        beds=beds,
+        baths=baths,
+        sqft=sqft,
+        status=_redfin_status(listing_ld),
+        description=listing_ld.get("description"),
+        photo_urls=photos,
+        raw={"_scraped": "jsonld_redfin", "jsonld": listing_ld, "url": url},
+    )
 
 
 # ── Dispatch by hostname ─────────────────────────────────────────────────────
