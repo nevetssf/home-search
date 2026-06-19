@@ -324,6 +324,26 @@ class IngestResult(BaseModel):
     raw_available: bool = True
 
 
+# ── Filter sets ────────────────────────────────────────────────────────────
+class FilterSetCreate(BaseModel):
+    name: str
+    payload: dict = {}  # {"value_filters": {...}, "filter_regions": [...]}
+
+
+class FilterSetUpdate(BaseModel):
+    name: Optional[str] = None
+    payload: Optional[dict] = None
+
+
+class FilterSetOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    name: str
+    payload: dict
+    created_at: datetime
+    updated_at: datetime
+
+
 # Validation helpers reused by routers
 VALID_STATUSES = set(PROPERTY_STATUSES)
 VALID_SOURCES = set(PROPERTY_SOURCES)

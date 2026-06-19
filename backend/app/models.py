@@ -183,6 +183,27 @@ class Note(Base):
     user = relationship("User", back_populates="notes")
 
 
+class FilterSet(Base):
+    """A named, persisted set of filter criteria for the List/Map views.
+
+    ``payload`` holds the criteria as JSON: ``{"value_filters": {col: text},
+    "filter_regions": [shape, ...]}``. Per-user so each household member keeps
+    their own; names are unique per user.
+    """
+
+    __tablename__ = "filter_sets"
+    __table_args__ = (
+        UniqueConstraint("user_id", "name", name="uq_filter_set_name"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=True)
+    name = Column(String, nullable=False)
+    payload = Column(JSON, nullable=False, default=dict)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class PointOfInterest(Base):
     """Fixed places the household cares about (primary home, an office)."""
 

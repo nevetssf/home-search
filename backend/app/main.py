@@ -11,7 +11,9 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
 from .database import init_db
-from .routers import auth, criteria, ingest, media, places, properties, tags
+from .routers import (
+    auth, criteria, filter_sets, ingest, media, places, properties, tags,
+)
 from .services.scheduler import shutdown_scheduler, start_scheduler
 
 logging.basicConfig(level=logging.INFO)
@@ -42,6 +44,7 @@ app.include_router(criteria.router)
 app.include_router(media.router)
 app.include_router(places.router)
 app.include_router(ingest.router)
+app.include_router(filter_sets.router)
 
 
 @app.get("/health", tags=["meta"])
