@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client'
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { AuthProvider, useAuth } from './auth'
 import { RegionsProvider } from './regions'
+import { FilterSetsProvider } from './filterSets'
 import App from './App'
 import Login from './pages/Login'
 import ListView from './pages/ListView'
@@ -29,7 +30,9 @@ ReactDOM.createRoot(document.getElementById('root')).render(
             element={
               <RequireAuth>
                 <RegionsProvider>
-                  <App />
+                  <FilterSetsProvider>
+                    <App />
+                  </FilterSetsProvider>
                 </RegionsProvider>
               </RequireAuth>
             }

@@ -1,69 +1,43 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Link, useSearchParams } from 'react-router-dom'
-import { deleteProperty, listCriteria, listProperties } from '../api'
-import FilterBar, { paramsToQuery } from '../components/FilterBar'
+import { Link } from 'react-router-dom'
+import { deleteProperty, listProperties } from '../api'
 import AddPropertyBar from '../components/AddPropertyBar'
-import { useRegions } from '../regions'
+import FilterSetPicker from '../components/FilterSetPicker'
+import { useViewState } from '../regions'
+import { useFilterSets } from '../filterSets'
+import { compareBy, passesValueFilters, useFilterColumns } from '../filters'
 import { inAnyShape } from '../geo'
 
 const fmtPrice = (p) => (p == null ? '—' : `$${Number(p).toLocaleString()}`)
 
-// ── client-side sort/filter helpers (applied over the ~50 loaded rows) ────────
-function compare(a, b, type) {
-  if (a == null && b == null) return 0
-  if (a == null) return 1 // nulls last
-  if (b == null) return -1
-  if (type === 'number') return a - b
-  if (type === 'bool') return a === b ? 0 : a ? -1 : 1
-  return String(a).localeCompare(String(b))
-}
-
-// Numeric columns understand >, <, >=, <=, = prefixes; everything else is a
-// case-insensitive substring match on the displayed value.
-function matches(value, filter, type) {
-  if (!filter) return true
-  if (type === 'number') {
-    const m = filter.match(/^\s*(>=|<=|>|<|=)?\s*(-?\d+\.?\d*)\s*$/)
-    if (m) {
-      if (value == null) return false
-      const n = parseFloat(m[2])
-      switch (m[1]) {
-        case '>': return value > n
-        case '<': return value < n
-        case '>=': return value >= n
-        case '<=': return value <= n
-        case '=': return value === n
-        default: return value === n
-      }
-    }
-  }
-  if (type === 'bool') {
-    if (value == null) return false
-    return (value ? 'yes' : 'no').includes(filter.toLowerCase())
-  }
-  return String(value ?? '').toLowerCase().includes(filter.toLowerCase())
+// View-specific cell rendering for the shared columns.
+function renderCell(col, p) {
+  const v = col.get(p)
+  if (col.key === 'address') return <Link to={`/property/${p.id}`}>{v || `#${p.id}`}</Link>
+  if (col.key === 'price') return fmtPrice(v)
+  if (col.key === 'status') return <span className={`badge ${v}`}>{v?.replace('_', ' ')}</span>
+  if (col.key === 'tags') return v ? v.split(', ').map((n) => <span key={n} className="tag sm">{n}</span>) : ''
+  if (col.key === 'overall_score') return v == null ? '—' : `${Math.round(v * 100)}%`
+  if (col.type === 'bool') return v == null ? '—' : v ? '✓' : '✗'
+  return v ?? '—'
 }
 
 export default function ListView() {
-  const [params] = useSearchParams()
   const [rows, setRows] = useState([])
-  const [criteria, setCriteria] = useState([])
   const [loading, setLoading] = useState(true)
-  const [sort, setSort] = useState({ key: 'created', dir: 1 })
-  const [colFilters, setColFilters] = useState({}) // {colKey: text}
-  const { filter: filterRegions, setFilter: setFilterRegions } = useRegions()
+  const { sort, setSort, listFade, setListFade } = useViewState()
+  const {
+    valueFilters, setValueFilters, filterRegions, setFilterRegions,
+  } = useFilterSets()
+  const columns = useFilterColumns()
 
   const load = () => {
     setLoading(true)
-    Promise.all([
-      listProperties({ ...paramsToQuery(params), with_criteria: true }),
-      listCriteria(),
-    ])
-      .then(([props, crits]) => { setRows(props); setCriteria(crits) })
+    listProperties({ with_criteria: true })
+      .then(setRows)
       .finally(() => setLoading(false))
   }
-
-  useEffect(load, [params])
+  useEffect(load, [])
 
   const remove = async (p, e) => {
     e.preventDefault(); e.stopPropagation()
@@ -72,79 +46,46 @@ export default function ListView() {
     load()
   }
 
-  // Columns: built-ins + one per criterion + overall score.
-  const columns = useMemo(() => {
-    const critType = (c) =>
-      c.value_type === 'boolean' ? 'bool'
-      : c.value_type === 'number' || c.value_type === 'rating' ? 'number'
-      : 'text'
-    const base = [
-      { key: 'address', label: 'Address', type: 'text', get: (p) => p.address,
-        render: (v, p) => <Link to={`/property/${p.id}`}>{v || `#${p.id}`}</Link> },
-      { key: 'city', label: 'City', type: 'text', get: (p) => p.city },
-      { key: 'price', label: 'Price', type: 'number', get: (p) => p.price, render: fmtPrice },
-      { key: 'beds', label: 'Beds', type: 'number', get: (p) => p.beds },
-      { key: 'baths', label: 'Baths', type: 'number', get: (p) => p.baths },
-      { key: 'sqft', label: 'Sqft', type: 'number', get: (p) => p.sqft },
-      { key: 'lot_size', label: 'Lot (ac)', type: 'number', get: (p) => p.lot_size },
-      { key: 'status', label: 'Status', type: 'text', get: (p) => p.status,
-        render: (v) => <span className={`badge ${v}`}>{v?.replace('_', ' ')}</span> },
-      { key: 'tags', label: 'Tags', type: 'text',
-        get: (p) => (p.tags || []).map((t) => t.name).join(', '),
-        render: (v) => v ? v.split(', ').map((n) => <span key={n} className="tag sm">{n}</span>) : '' },
-    ]
-    const crit = criteria.map((c) => {
-      const type = critType(c)
-      return {
-        key: `crit:${c.id}`, label: c.name + (c.is_subjective ? ' ★' : ''), type,
-        get: (p) => p.criteria?.[c.id] ?? null,
-        render: (v) =>
-          v == null ? '—'
-          : type === 'bool' ? (v ? '✓' : '✗')
-          : v,
-      }
-    })
-    const score = {
-      key: 'overall_score', label: 'Score', type: 'number',
-      get: (p) => p.overall_score,
-      render: (v) => (v == null ? '—' : `${Math.round(v * 100)}%`),
-    }
-    return [...base, ...crit, score]
-  }, [criteria])
+  // A property "matches" if it passes the value filters AND the spatial filter
+  // regions (if any). Non-matches are faded or hidden per fadeMode.
+  const passes = useMemo(() => {
+    return (p) =>
+      passesValueFilters(p, columns, valueFilters) &&
+      (filterRegions.length === 0 || inAnyShape(filterRegions, p.latitude, p.longitude))
+  }, [columns, valueFilters, filterRegions])
 
-  // Properties dropped purely by the map filter regions (for the banner count).
-  const regionFiltered = useMemo(
-    () => (filterRegions.length
-      ? rows.filter((p) => inAnyShape(filterRegions, p.latitude, p.longitude))
-      : rows),
-    [rows, filterRegions]
-  )
-
-  const view = useMemo(() => {
-    let out = regionFiltered.filter((p) =>
-      columns.every((c) => matches(c.get(p), colFilters[c.key] || '', c.type))
-    )
+  const sorted = useMemo(() => {
     const col = columns.find((c) => c.key === sort.key)
-    if (col) out = [...out].sort((a, b) => sort.dir * compare(col.get(a), col.get(b), col.type))
-    return out
-  }, [regionFiltered, columns, colFilters, sort])
+    if (!col) return rows
+    return [...rows].sort((a, b) => sort.dir * compareBy(col.get(a), col.get(b), col.type))
+  }, [rows, columns, sort])
+
+  const visible = listFade ? sorted : sorted.filter(passes)
+  const matchCount = useMemo(() => rows.filter(passes).length, [rows, passes])
+  const filtersActive = Object.values(valueFilters).some(Boolean) || filterRegions.length > 0
 
   const toggleSort = (key) =>
-    setSort((s) => (s.key === key ? { key, dir: -s.dir } : { key, dir: 1 }))
-
-  const setFilter = (key, val) => setColFilters((f) => ({ ...f, [key]: val }))
+    setSort(sort.key === key ? { key, dir: -sort.dir } : { key, dir: 1 })
+  const setFilter = (key, val) => setValueFilters({ ...valueFilters, [key]: val })
 
   return (
     <div>
       <AddPropertyBar onChange={load} />
-      <FilterBar />
-      {filterRegions.length > 0 && (
-        <div className="region-filter-banner">
-          🗺️ Map filter active ({filterRegions.length} region{filterRegions.length > 1 ? 's' : ''}) —
-          showing {regionFiltered.length} of {rows.length} properties.
-          <button className="link-btn" onClick={() => setFilterRegions([])}>clear</button>
-        </div>
-      )}
+      <div className="list-toolbar">
+        <FilterSetPicker />
+        <span className="muted">
+          {filtersActive ? `${matchCount} of ${rows.length} match` : `${rows.length} properties`}
+        </span>
+        <label className="inline-check">
+          <input type="checkbox" checked={listFade} onChange={(e) => setListFade(e.target.checked)} />
+          fade non-matches (uncheck to hide)
+        </label>
+        {filtersActive && (
+          <button className="link-btn" onClick={() => { setValueFilters({}); setFilterRegions([]) }}>
+            clear all filters
+          </button>
+        )}
+      </div>
       {loading ? (
         <p>Loading…</p>
       ) : (
@@ -163,7 +104,7 @@ export default function ListView() {
                 {columns.map((c) => (
                   <th key={c.key}>
                     <input
-                      value={colFilters[c.key] || ''}
+                      value={valueFilters[c.key] || ''}
                       placeholder={c.type === 'number' ? '>0' : 'filter'}
                       onChange={(e) => setFilter(c.key, e.target.value)}
                     />
@@ -173,15 +114,15 @@ export default function ListView() {
               </tr>
             </thead>
             <tbody>
-              {view.map((p) => (
-                <tr key={p.id}>
+              {visible.map((p) => (
+                <tr key={p.id} className={passes(p) ? '' : 'faded'}>
                   {columns.map((c) => (
-                    <td key={c.key}>{c.render ? c.render(c.get(p), p) : (c.get(p) ?? '—')}</td>
+                    <td key={c.key}>{renderCell(c, p)}</td>
                   ))}
                   <td><button className="link-btn danger" onClick={(e) => remove(p, e)}>delete</button></td>
                 </tr>
               ))}
-              {view.length === 0 && (
+              {visible.length === 0 && (
                 <tr><td colSpan={columns.length + 1} className="muted">No properties match.</td></tr>
               )}
             </tbody>

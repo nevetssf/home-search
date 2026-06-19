@@ -1,37 +1,45 @@
-// Shared store for map-drawn regions, in two sets:
-//   • search — regions to pull listings from (drives POST /ingest/region)
-//   • filter — regions that narrow which properties show in the List view
-// Lives above the routes (so it survives List↔Map navigation) and is persisted
-// to localStorage (so it survives reloads). Each set is an array of shape
-// payloads: { kind:'rectangle'|'circle'|'polygon', ... } with [lat,lng] coords.
+// Lightweight, localStorage-persisted UI/session state shared by List & Map:
+//   • search   — region shapes that "Search this area" pulls listings from
+//   • sort     — list sort {key, dir}
+//   • listFade / mapFade — per-view: true = fade non-matches, false = hide them
+// (Filter *criteria* — value filters + filter regions — live in named filter
+// sets persisted server-side; see filterSets.jsx.)
 import { createContext, useContext, useEffect, useState } from 'react'
 
-const KEY = 'home-search:regions'
-const RegionsContext = createContext(null)
+const KEY = 'home-search:viewstate'
+const Ctx = createContext(null)
 
 function load() {
   try {
-    const v = JSON.parse(localStorage.getItem(KEY))
-    return { search: v?.search || [], filter: v?.filter || [] }
+    return JSON.parse(localStorage.getItem(KEY)) || {}
   } catch {
-    return { search: [], filter: [] }
+    return {}
   }
 }
 
 export function RegionsProvider({ children }) {
-  const initial = load()
-  const [search, setSearch] = useState(initial.search)
-  const [filter, setFilter] = useState(initial.filter)
+  const init = load()
+  const [search, setSearch] = useState(init.search || [])
+  const [sort, setSort] = useState(init.sort || { key: 'created', dir: 1 })
+  const [listFade, setListFade] = useState(init.listFade ?? true)
+  const [mapFade, setMapFade] = useState(init.mapFade ?? true)
 
   useEffect(() => {
-    localStorage.setItem(KEY, JSON.stringify({ search, filter }))
-  }, [search, filter])
+    localStorage.setItem(KEY, JSON.stringify({ search, sort, listFade, mapFade }))
+  }, [search, sort, listFade, mapFade])
 
   return (
-    <RegionsContext.Provider value={{ search, setSearch, filter, setFilter }}>
+    <Ctx.Provider
+      value={{
+        search, setSearch,
+        sort, setSort,
+        listFade, setListFade,
+        mapFade, setMapFade,
+      }}
+    >
       {children}
-    </RegionsContext.Provider>
+    </Ctx.Provider>
   )
 }
 
-export const useRegions = () => useContext(RegionsContext)
+export const useViewState = () => useContext(Ctx)

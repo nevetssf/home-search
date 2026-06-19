@@ -87,6 +87,18 @@ button { cursor: pointer; }
 .chip.on { color: #fff; }
 .region-filter-banner { background: #fff3e0; border: 1px solid #e65100; border-radius: 6px; padding: 6px 12px; margin-bottom: 10px; font-size: 0.9em; }
 .leaflet-container { z-index: 0; }
+.filter-panel { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 6px 12px; background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 12px; margin-bottom: 10px; }
+.filter-field { display: flex; flex-direction: column; gap: 2px; font-size: 0.8em; color: var(--muted); }
+.filter-field input { padding: 4px 6px; }
+
+/* ── Filter-set picker ── */
+.filterset-picker { display: inline-flex; align-items: center; gap: 6px; }
+.filterset-picker select { padding: 4px 6px; }
+
+/* ── List toolbar + faded (non-matching) rows ── */
+.list-toolbar { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+.grid tr.faded td { opacity: 0.35; }
+.grid tr.faded .badge, .grid tr.faded .tag { opacity: 0.55; }
 
 /* ── Detail ── */
 .detail-head { display: flex; justify-content: space-between; align-items: center; }

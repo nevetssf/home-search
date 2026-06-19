@@ -108,4 +108,11 @@ export const ingestRealtorSearch = (params) =>
 export const searchRegion = (shapes, opts = {}) =>
   api.post('/ingest/region', { shapes, ...opts }).then((r) => r.data)
 
+// ── Filter sets (named, persisted filter criteria) ────────────────────────────
+export const listFilterSets = () => api.get('/filter-sets').then((r) => r.data)
+export const createFilterSet = (body) => api.post('/filter-sets', body).then((r) => r.data)
+export const updateFilterSet = (id, body) =>
+  api.patch(`/filter-sets/${id}`, body).then((r) => r.data)
+export const deleteFilterSet = (id) => api.delete(`/filter-sets/${id}`)
+
 export default api

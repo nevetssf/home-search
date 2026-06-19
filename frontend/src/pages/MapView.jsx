@@ -4,18 +4,22 @@
 //   • FILTER (orange) — narrows which properties show in the List view.
 // Draw with the toolbar (top-right) into whichever set is active; toggle each
 // set's visibility; click a region to remove it.
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { Link, useSearchParams } from 'react-router-dom'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
 import {
-  Circle, CircleMarker, MapContainer, Polygon, Popup, Rectangle, TileLayer, useMap,
+  Circle, CircleMarker, MapContainer, Polygon, Popup, Rectangle, TileLayer,
+  useMap, useMapEvents,
 } from 'react-leaflet'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import 'leaflet-draw'
 import 'leaflet-draw/dist/leaflet.draw.css'
 import { listProperties, searchRegion } from '../api'
-import { useRegions } from '../regions'
-import FilterBar, { paramsToQuery } from '../components/FilterBar'
+import { useViewState } from '../regions'
+import { useFilterSets } from '../filterSets'
+import { passesValueFilters, useFilterColumns } from '../filters'
+import { inAnyShape } from '../geo'
+import FilterSetPicker from '../components/FilterSetPicker'
 
 const STATUS_COLOR = {
   for_sale: '#2e7d32', pending: '#f9a825', sold: '#c62828',
@@ -87,6 +91,26 @@ function RegionLayer({ shapes, color, onRemove }) {
   })
 }
 
+// Persist the map's center/zoom so the view is restored on return (and reload).
+const VIEW_KEY = 'home-search:mapview'
+function loadView() {
+  try {
+    const v = JSON.parse(localStorage.getItem(VIEW_KEY))
+    return v && Array.isArray(v.center) && typeof v.zoom === 'number' ? v : null
+  } catch {
+    return null
+  }
+}
+function ViewPersist() {
+  const save = (map) =>
+    localStorage.setItem(
+      VIEW_KEY,
+      JSON.stringify({ center: [map.getCenter().lat, map.getCenter().lng], zoom: map.getZoom() })
+    )
+  const map = useMapEvents({ moveend: () => save(map), zoomend: () => save(map) })
+  return null
+}
+
 function FitBounds({ points }) {
   const map = useMap()
   const done = useRef(false)
@@ -100,19 +124,33 @@ function FitBounds({ points }) {
 }
 
 export default function MapView() {
-  const [params] = useSearchParams()
-  const { search, setSearch, filter, setFilter } = useRegions()
+  const { search, setSearch, mapFade, setMapFade } = useViewState()
+  const {
+    valueFilters, setValueFilters, filterRegions: filter, setFilterRegions: setFilter,
+  } = useFilterSets()
+  const columns = useFilterColumns()
   const [rows, setRows] = useState([])
   const [active, setActive] = useState('search')  // which set new shapes go into
   const [show, setShow] = useState({ search: true, filter: true })
+  const [showFilters, setShowFilters] = useState(false)
   const [searching, setSearching] = useState(false)
   const [msg, setMsg] = useState('')
+  const savedView = useRef(loadView())  // last viewport, read once on mount
 
   const load = useCallback(
-    () => listProperties(paramsToQuery(params)).then(setRows).catch(() => {}),
-    [params]
+    () => listProperties({ with_criteria: true }).then(setRows).catch(() => {}),
+    []
   )
   useEffect(() => { load() }, [load])
+
+  // Same match rule as the List view: passes value filters AND filter regions.
+  const passes = useMemo(
+    () => (p) =>
+      passesValueFilters(p, columns, valueFilters) &&
+      (filter.length === 0 || inAnyShape(filter, p.latitude, p.longitude)),
+    [columns, valueFilters, filter]
+  )
+  const activeFilterCount = Object.values(valueFilters).filter(Boolean).length
 
   const addToActive = useCallback(
     (shape) => (active === 'search' ? setSearch((s) => [...s, shape]) : setFilter((s) => [...s, shape])),
@@ -141,10 +179,39 @@ export default function MapView() {
 
   const located = rows.filter((p) => p.latitude != null && p.longitude != null)
   const points = located.map((p) => [p.latitude, p.longitude])
+  const setFilterVal = (key, val) => setValueFilters({ ...valueFilters, [key]: val })
 
   return (
     <div>
-      <FilterBar />
+      <div className="region-bar">
+        <FilterSetPicker />
+        <button onClick={() => setShowFilters((v) => !v)}>
+          {showFilters ? 'Hide filters' : 'Filters'}{activeFilterCount ? ` (${activeFilterCount})` : ''}
+        </button>
+        <label className="inline-check">
+          <input type="checkbox" checked={mapFade} onChange={(e) => setMapFade(e.target.checked)} />
+          fade non-matches (uncheck to hide)
+        </label>
+        {(activeFilterCount > 0 || filter.length > 0) && (
+          <button className="link-btn" onClick={() => { setValueFilters({}); setFilter([]) }}>
+            clear all filters
+          </button>
+        )}
+      </div>
+      {showFilters && (
+        <div className="filter-panel">
+          {columns.map((c) => (
+            <label key={c.key} className="filter-field">
+              <span>{c.label}</span>
+              <input
+                value={valueFilters[c.key] || ''}
+                placeholder={c.type === 'number' ? '>0' : 'filter'}
+                onChange={(e) => setFilterVal(c.key, e.target.value)}
+              />
+            </label>
+          ))}
+        </div>
+      )}
       <div className="region-bar">
         <span className="region-mode">
           Draw into:
@@ -171,28 +238,39 @@ export default function MapView() {
           {searching ? 'Searching…' : `Search this area${search.length ? ` (${search.length})` : ''}`}
         </button>
         {filter.length > 0 && (
-          <span className="muted">· filter narrows the List view to {filter.length} region(s)</span>
+          <span className="muted">· filter regions narrow List + Map ({filter.length})</span>
         )}
         {msg && <span className="region-msg">{msg}</span>}
       </div>
 
-      <MapContainer center={[39.5, -98.35]} zoom={4} className="map" scrollWheelZoom>
+      <MapContainer
+        center={savedView.current?.center || [39.5, -98.35]}
+        zoom={savedView.current?.zoom ?? 4}
+        className="map"
+        scrollWheelZoom
+      >
         <TileLayer
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
+        <ViewPersist />
         <DrawTools onCreate={addToActive} />
-        <FitBounds points={points} />
+        {/* Auto-fit to properties only on the first-ever visit; afterward, the
+            user's saved viewport wins. */}
+        {!savedView.current && <FitBounds points={points} />}
         {show.search && <RegionLayer shapes={search} color={SET_COLOR.search} onRemove={removeFrom('search')} />}
         {show.filter && <RegionLayer shapes={filter} color={SET_COLOR.filter} onRemove={removeFrom('filter')} />}
-        {located.map((p) => (
+        {located.map((p) => {
+          const ok = passes(p)
+          if (!ok && !mapFade) return null  // hide mode: drop non-matches
+          return (
           <CircleMarker
             key={p.id}
             center={[p.latitude, p.longitude]}
             radius={8}
             pathOptions={{
-              color: '#fff', weight: 2,
-              fillColor: STATUS_COLOR[p.status] || '#555', fillOpacity: 1,
+              color: '#fff', weight: 2, opacity: ok ? 1 : 0.7,
+              fillColor: STATUS_COLOR[p.status] || '#555', fillOpacity: ok ? 1 : 0.45,
             }}
           >
             <Popup>
@@ -203,7 +281,8 @@ export default function MapView() {
               {' '}<Link to={`/property/${p.id}`}>details →</Link>
             </Popup>
           </CircleMarker>
-        ))}
+          )
+        })}
       </MapContainer>
     </div>
   )
