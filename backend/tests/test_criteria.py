@@ -119,6 +119,31 @@ def test_boolean_criterion_filter(client, make_property):
     assert [p["id"] for p in r.json()] == [p1["id"]]
 
 
+def test_list_with_criteria_attaches_columns_and_score(client, make_property):
+    prop = make_property()
+    acres = _make_criterion(client, name="Acres", value_type="number", unit="acres")
+    feel = _make_criterion(
+        client, name="Feel", value_type="rating", is_subjective=True,
+        scale_min=1, scale_max=5,
+    )
+    client.put(f"/properties/{prop['id']}/criteria/{acres['id']}", json={"value_number": 8})
+    client.put(f"/properties/{prop['id']}/criteria/{feel['id']}", json={"value_number": 4})
+
+    rows = client.get("/properties", params={"with_criteria": True}).json()
+    row = next(r for r in rows if r["id"] == prop["id"])
+    # objective value shown directly; subjective shown as household mean (raw)
+    assert row["criteria"][str(acres["id"])] == 8
+    assert row["criteria"][str(feel["id"])] == 4
+    assert abs(row["overall_score"] - 0.75) < 1e-9
+
+
+def test_list_without_criteria_flag_omits_them(client, make_property):
+    make_property()
+    rows = client.get("/properties").json()
+    assert rows[0]["criteria"] is None
+    assert rows[0]["overall_score"] is None
+
+
 def test_no_subjective_ratings_gives_null_score(client, make_property):
     prop = make_property()
     crit = _make_criterion(client, name="Acres", value_type="number")

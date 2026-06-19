@@ -149,6 +149,11 @@ class PropertyOut(PropertyBase):
     created_at: datetime
     updated_at: datetime
     tags: List[TagOut] = []
+    # Populated only when the list endpoint is called with ?with_criteria=true.
+    # {criterion_id(str): value} — objective shared value, or the household mean
+    # rating for subjective criteria. overall_score is the weighted score (0..1).
+    criteria: Optional[dict] = None
+    overall_score: Optional[float] = None
 
 
 class PropertyDetailOut(PropertyOut):
@@ -274,6 +279,19 @@ class ZillowSearchIngest(BaseModel):
     max_price: Optional[int] = None
     beds_min: Optional[int] = None
     home_type: Optional[str] = None
+
+
+class RealtorSearchIngest(BaseModel):
+    location: str
+    listing_type: str = "for_sale"  # for_sale | for_rent | sold | pending
+    radius: Optional[float] = None
+    beds_min: Optional[int] = None
+    baths_min: Optional[float] = None
+    price_min: Optional[int] = None
+    price_max: Optional[int] = None
+    sqft_min: Optional[int] = None
+    sqft_max: Optional[int] = None
+    past_days: Optional[int] = None
 
 
 class IngestResult(BaseModel):

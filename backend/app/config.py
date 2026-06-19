@@ -35,6 +35,10 @@ class Settings(BaseSettings):
     rapidapi_key: str = ""
     rapidapi_zillow_host: str = "zillow-com1.p.rapidapi.com"
 
+    # ── Realtor.com (HomeHarvest, no API key) ─────────────────────────────
+    realtor_enabled: bool = True
+    realtor_default_radius: float = 0.0  # miles; 0 = no radius expansion
+
     # ── Google Maps Platform ──────────────────────────────────────────────
     google_maps_api_key: str = ""
 

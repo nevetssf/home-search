@@ -15,27 +15,40 @@ APScheduler · Docker Compose · runs on boulder-server over Tailscale.
 
 ## Quick start (local dev)
 
-**Backend** (http://localhost:8000, docs at `/docs`):
+**One command — run both servers:**
 
 ```bash
+./dev.sh
+```
+
+This creates the backend venv, installs deps on first run (and re-installs when
+`requirements.txt` / `package.json` change), applies DB migrations, and starts
+the backend (http://localhost:8000, docs at `/docs`) and frontend
+(http://localhost:3000, which proxies `/api` → backend). Ctrl+C stops both.
+
+On first run, create the initial user (auth-gated routes need one — `dev.sh`
+prints this reminder if no users exist):
+
+```bash
+cd backend && source .venv/bin/activate && python seed_user.py you@example.com "Your Name" <password>
+```
+
+Then sign in with that user.
+
+<details><summary>Manual / two-terminal setup</summary>
+
+```bash
+# terminal 1 — backend
 cd backend
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-cp ../.env.example .env          # set a JWT_SECRET_KEY at minimum
 alembic upgrade head
-python seed_user.py you@example.com "Your Name" <password>   # first user
 uvicorn app.main:app --reload
+
+# terminal 2 — frontend
+cd frontend && npm install && npm run dev
 ```
-
-**Frontend** (http://localhost:3000, proxies `/api` → backend):
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-Then sign in with the user you seeded.
+</details>
 
 ## Tests
 

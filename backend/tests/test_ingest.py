@@ -132,37 +132,126 @@ def test_zillow_url_ingest_via_scrape(client, monkeypatch):
     assert r2.json()["updated"] == 1
 
 
+# A real Redfin page interleaves the subject RealEstateListing with several
+# "similar homes" SingleFamilyResidence blocks at *other* addresses. The decoy
+# below (San Francisco) must NOT win — that was the Santa-Rosa→SF bug.
+_REDFIN_HTML = """
+<script type="application/ld+json">
+{"@type":"SingleFamilyResidence",
+ "address":{"streetAddress":"568 6th Ave","addressLocality":"San Francisco",
+   "addressRegion":"CA","postalCode":"94118"}}
+</script>
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":["Product","RealEstateListing"],
+ "name":"1 Oak Rd","description":"Lovely.",
+ "url":"https://www.redfin.com/CA/Healdsburg/1-Oak-Rd-95448/home/123",
+ "image":[{"@type":"ImageObject","url":"https://img/redfin/a.jpg"}],
+ "offers":{"@type":"Offer","price":1500000,"availability":"https://schema.org/InStock"},
+ "mainEntity":{"@type":"SingleFamilyResidence","numberOfBedrooms":4,
+   "geo":{"latitude":38.6,"longitude":-122.9}}}
+</script>
+"""
+
+
 def test_redfin_url_ingest_via_scrape(client, monkeypatch):
-    html = """
-    <script type="application/ld+json">
-    {"@type":"SingleFamilyResidence",
-     "address":{"streetAddress":"1 Oak Rd","addressLocality":"Healdsburg",
-       "addressRegion":"CA","postalCode":"95448"},
-     "geo":{"latitude":38.6,"longitude":-122.9},"offers":{"price":1500000}}
-    </script>
-    """
-    monkeypatch.setattr(scrape, "fetch_html", lambda url: html)
+    monkeypatch.setattr(scrape, "fetch_html", lambda url: _REDFIN_HTML)
     r = client.post(
         "/ingest/url",
-        json={"url": "https://www.redfin.com/CA/Healdsburg/1-Oak-Rd/home/123"},
+        json={"url": "https://www.redfin.com/CA/Healdsburg/1-Oak-Rd-95448/home/123"},
         params={"download_photos": False},
     )
     assert r.status_code == 200, r.text
     detail = client.get(f"/properties/{r.json()['property_ids'][0]}").json()
     assert detail["source"] == "redfin"
-    assert detail["city"] == "Healdsburg"
+    assert detail["address"] == "1 Oak Rd"
+    assert detail["city"] == "Healdsburg"   # from URL slug, NOT the SF decoy
+    assert detail["state"] == "CA"
+    assert detail["zip"] == "95448"
     assert detail["price"] == 1500000
+    assert detail["beds"] == 4              # enriched from mainEntity
 
 
-def test_scrape_blocked_without_api_key_returns_502(client, monkeypatch):
-    """Zillow blocked + no RAPIDAPI key → 502 (caller falls back to manual)."""
-    def blocked(url):
-        raise scrape.ScrapeBlocked("bot wall")
-
-    monkeypatch.setattr(scrape, "fetch_html", blocked)
-    r = client.post(
-        "/ingest/url", json={"url": "https://www.zillow.com/homedetails/x/1_zpid/"}
+def test_redfin_scrape_unit_ignores_similar_homes(monkeypatch):
+    """Regression: the similar-homes SingleFamilyResidence block is ignored."""
+    monkeypatch.setattr(scrape, "fetch_html", lambda url: _REDFIN_HTML)
+    listing = scrape.scrape_redfin(
+        "https://www.redfin.com/CA/Healdsburg/1-Oak-Rd-95448/home/123"
     )
+    assert listing.city == "Healdsburg"
+    assert listing.address == "1 Oak Rd"
+    assert listing.latitude == 38.6
+
+
+_SANTA_ROSA_SLUG = {
+    "zpid": "12345", "street": "7455 Foothill Ranch Rd", "city": "Santa Rosa",
+    "state": "CA", "zip": "95404", "lat": 38.44, "lng": -122.71,
+}
+_SR_URL = "https://www.zillow.com/homedetails/7455-Foothill-Ranch-Rd-Santa-Rosa-CA-95404/12345_zpid/"
+
+
+def test_parse_zillow_url_resolves_multiword_city(monkeypatch):
+    # Avoid pgeocode network: stub the ZIP lookup.
+    monkeypatch.setattr(scrape, "_zip_lookup", lambda z: {
+        "city": "Santa Rosa", "state": "CA", "lat": 38.44, "lng": -122.71,
+    })
+    parsed = scrape.parse_zillow_url(_SR_URL)
+    assert parsed["zpid"] == "12345"
+    assert parsed["zip"] == "95404"
+    assert parsed["city"] == "Santa Rosa"   # multi-word, from ZIP
+    assert parsed["street"] == "7455 Foothill Ranch Rd"  # city words stripped
+
+
+def test_zillow_blocked_falls_back_to_slug_stub(client, monkeypatch):
+    """Blocked + no API key + no Realtor match → accurate address-only stub."""
+    from app.services import realtor as realtor_mod
+
+    monkeypatch.setattr(scrape, "fetch_html", lambda url: (_ for _ in ()).throw(
+        scrape.ScrapeBlocked("bot wall")))
+    monkeypatch.setattr(scrape, "parse_zillow_url", lambda url: dict(_SANTA_ROSA_SLUG))
+    monkeypatch.setattr(realtor_mod, "search", lambda **k: [])  # no Realtor match
+
+    r = client.post("/ingest/url", json={"url": _SR_URL}, params={"download_photos": False})
+    assert r.status_code == 200, r.text
+    detail = client.get(f"/properties/{r.json()['property_ids'][0]}").json()
+    assert detail["source"] == "zillow"
+    assert detail["city"] == "Santa Rosa"
+    assert detail["address"] == "7455 Foothill Ranch Rd"
+    assert detail["zip"] == "95404"
+    assert detail["price"] is None  # stub: address only, user/API fills the rest
+
+
+def test_zillow_blocked_enriches_from_realtor_on_match(client, monkeypatch):
+    """Blocked + a Realtor result whose zip+house number match → full data."""
+    from app.services import realtor as realtor_mod
+    from app.services.zillow import NormalizedListing
+
+    monkeypatch.setattr(scrape, "fetch_html", lambda url: (_ for _ in ()).throw(
+        scrape.ScrapeBlocked("bot wall")))
+    monkeypatch.setattr(scrape, "parse_zillow_url", lambda url: dict(_SANTA_ROSA_SLUG))
+
+    match = NormalizedListing(
+        source_id="R1", source_url="https://realtor.com/x",
+        address="7455 Foothill Ranch Rd", city="Santa Rosa", state="CA",
+        zip="95404", price=2000000, beds=4,
+    )
+    # Include a decoy with a different house number to prove the guard works.
+    decoy = NormalizedListing(source_id="R2", source_url=None, address="999 Other Rd", zip="95404")
+    monkeypatch.setattr(realtor_mod, "search", lambda **k: [decoy, match])
+
+    r = client.post("/ingest/url", json={"url": _SR_URL}, params={"download_photos": False})
+    assert r.status_code == 200, r.text
+    detail = client.get(f"/properties/{r.json()['property_ids'][0]}").json()
+    assert detail["source"] == "realtor"
+    assert detail["price"] == 2000000
+    assert detail["beds"] == 4
+    assert detail["source_url"] == _SR_URL  # keeps the pasted Zillow link
+
+
+def test_zillow_unparseable_url_returns_502(client, monkeypatch):
+    monkeypatch.setattr(scrape, "fetch_html", lambda url: (_ for _ in ()).throw(
+        scrape.ScrapeBlocked("bot wall")))
+    monkeypatch.setattr(scrape, "parse_zillow_url", lambda url: None)
+    r = client.post("/ingest/url", json={"url": "https://www.zillow.com/b/nonsense/"})
     assert r.status_code == 502
 
 

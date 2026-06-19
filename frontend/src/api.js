@@ -100,5 +100,9 @@ export const ingestRedfinCsv = (file) => {
   fd.append('file', file)
   return api.post('/ingest/redfin/csv', fd).then((r) => r.data)
 }
+// Area/criteria search on Realtor.com (HomeHarvest, no API key); pass any
+// subset of {location, listing_type, radius, beds_min, price_min, price_max}.
+export const ingestRealtorSearch = (params) =>
+  api.post('/ingest/realtor/search', params).then((r) => r.data)
 
 export default api

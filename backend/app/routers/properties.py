@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session, selectinload
 from .. import schemas
 from ..auth import get_current_user
 from ..database import get_db
+from ..services import scoring
 from ..models import (
     OBJECTIVE_USER_ID,
     Criterion,
@@ -87,6 +88,9 @@ def list_properties(
     ),
     archived: bool = False,
     sort: str = Query("created_at", description="field, prefix '-' for desc"),
+    with_criteria: bool = Query(
+        False, description="attach criterion values + overall score for list columns"
+    ),
     limit: int = 500,
 ):
     q = db.query(Property).options(selectinload(Property.tags))
@@ -152,7 +156,60 @@ def list_properties(
     col = getattr(Property, field, Property.created_at)
     q = q.order_by(col.desc() if desc else col.asc())
 
-    return q.limit(limit).all()
+    results = q.limit(limit).all()
+
+    # Always set the ad-hoc fields so the response model serializes cleanly;
+    # populate them only when criteria columns were requested.
+    for p in results:
+        p.criteria = None
+        p.overall_score = None
+    if with_criteria and results:
+        _attach_criteria(db, results)
+    return results
+
+
+def _criterion_display_value(crit: Criterion, cv: CriterionValue):
+    """The single value to show in a list column for an objective criterion."""
+    if crit.value_type == "boolean":
+        return cv.value_bool
+    if crit.value_type in ("number", "rating"):
+        return cv.value_number
+    return cv.value_text
+
+
+def _attach_criteria(db: Session, props: List[Property]) -> None:
+    """Bulk-load criterion values for the page and attach a display map + score.
+
+    Objective criteria show their shared value; subjective criteria show the
+    household mean rating (raw, on the criterion's own scale)."""
+    criteria = {c.id: c for c in db.query(Criterion).all()}
+    pids = [p.id for p in props]
+    values = (
+        db.query(CriterionValue)
+        .filter(CriterionValue.property_id.in_(pids))
+        .all()
+    )
+    by_prop: dict[int, list[CriterionValue]] = {}
+    for cv in values:
+        by_prop.setdefault(cv.property_id, []).append(cv)
+
+    for p in props:
+        vals = by_prop.get(p.id, [])
+        display: dict[str, object] = {}
+        subjective_sums: dict[int, list[float]] = {}
+        for cv in vals:
+            crit = criteria.get(cv.criterion_id)
+            if not crit:
+                continue
+            if crit.is_subjective:
+                if cv.user_id != OBJECTIVE_USER_ID and cv.value_number is not None:
+                    subjective_sums.setdefault(cv.criterion_id, []).append(cv.value_number)
+            elif cv.user_id == OBJECTIVE_USER_ID:
+                display[str(cv.criterion_id)] = _criterion_display_value(crit, cv)
+        for cid, xs in subjective_sums.items():
+            display[str(cid)] = round(sum(xs) / len(xs), 2)
+        p.criteria = display
+        p.overall_score = scoring.overall_score(criteria, vals)
 
 
 @router.get("/{property_id}", response_model=schemas.PropertyDetailOut)

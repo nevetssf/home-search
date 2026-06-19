@@ -2,13 +2,14 @@
 // property manually. Manual entry is the graceful fallback (PLAN.md §6).
 import { useNavigate } from 'react-router-dom'
 import { useState } from 'react'
-import { createProperty, ingestRedfinCsv, ingestUrl } from '../api'
+import { createProperty, ingestRealtorSearch, ingestRedfinCsv, ingestUrl } from '../api'
 
 export default function AddPropertyBar({ onChange }) {
   const nav = useNavigate()
   const [url, setUrl] = useState('')
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
+  const [search, setSearch] = useState({ location: '', beds_min: '', price_min: '', price_max: '' })
 
   const addFromUrl = async (e) => {
     e.preventDefault()
@@ -47,6 +48,30 @@ export default function AddPropertyBar({ onChange }) {
     }
   }
 
+  const searchRealtor = async (e) => {
+    e.preventDefault()
+    if (!search.location) return
+    setBusy(true); setMsg('')
+    try {
+      // Drop blanks; coerce the numeric fields the backend expects as ints.
+      const params = { location: search.location }
+      for (const k of ['beds_min', 'price_min', 'price_max']) {
+        if (search[k] !== '') params[k] = Number(search[k])
+      }
+      const res = await ingestRealtorSearch(params)
+      setMsg(`Realtor.com: ${res.created} new, ${res.updated} updated.`)
+      onChange?.()
+    } catch (err) {
+      setMsg(
+        err.response?.status === 503
+          ? 'Realtor search unavailable (blocked or disabled) — try from your home network.'
+          : 'Realtor search failed.'
+      )
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const addManual = async () => {
     const p = await createProperty({ source: 'manual', status: 'for_sale' })
     nav(`/property/${p.id}`)
@@ -60,6 +85,29 @@ export default function AddPropertyBar({ onChange }) {
           onChange={(e) => setUrl(e.target.value)}
         />
         <button disabled={busy} type="submit">{busy ? 'Fetching…' : 'Add from URL'}</button>
+      </form>
+      <form onSubmit={searchRealtor} className="addbar-realtor">
+        <input
+          placeholder="Search Realtor.com area (e.g. Boulder, CO or 80302)…"
+          value={search.location}
+          onChange={(e) => setSearch({ ...search, location: e.target.value })}
+        />
+        <input
+          type="number" min="0" placeholder="Beds" style={{ width: '4.5em' }}
+          value={search.beds_min}
+          onChange={(e) => setSearch({ ...search, beds_min: e.target.value })}
+        />
+        <input
+          type="number" min="0" placeholder="Min $" style={{ width: '7em' }}
+          value={search.price_min}
+          onChange={(e) => setSearch({ ...search, price_min: e.target.value })}
+        />
+        <input
+          type="number" min="0" placeholder="Max $" style={{ width: '7em' }}
+          value={search.price_max}
+          onChange={(e) => setSearch({ ...search, price_max: e.target.value })}
+        />
+        <button disabled={busy} type="submit">{busy ? 'Searching…' : 'Search area'}</button>
       </form>
       <label className="filelabel">
         Import Redfin CSV

@@ -57,7 +57,7 @@ class Property(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     # Source / cache
-    source = Column(String, default="manual")  # zillow | redfin | manual
+    source = Column(String, default="manual")  # zillow | redfin | realtor | manual
     source_url = Column(String, nullable=True)
     source_id = Column(String, index=True, nullable=True)  # e.g. zpid
     raw_payload = Column(JSON, nullable=True)  # full cached API response
