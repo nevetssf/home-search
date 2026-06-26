@@ -13,7 +13,18 @@ const fmtPrice = (p) => (p == null ? '—' : `$${Number(p).toLocaleString()}`)
 // View-specific cell rendering for the shared columns.
 function renderCell(col, p) {
   const v = col.get(p)
-  if (col.key === 'address') return <Link to={`/property/${p.id}`}>{v || `#${p.id}`}</Link>
+  if (col.key === 'address') return (
+    <span className="addr-cell">
+      {p.source_url && (
+        <a
+          href={p.source_url} target="_blank" rel="noreferrer"
+          title="Open listing in a new tab"
+          onClick={(e) => e.stopPropagation()}
+        >↗</a>
+      )}
+      <Link to={`/property/${p.id}`}>{v || `#${p.id}`}</Link>
+    </span>
+  )
   if (col.key === 'price') return fmtPrice(v)
   if (col.key === 'status') return <span className={`badge ${v}`}>{v?.replace('_', ' ')}</span>
   if (col.key === 'tags') return v ? v.split(', ').map((n) => <span key={n} className="tag sm">{n}</span>) : ''
@@ -69,7 +80,7 @@ export default function ListView() {
   const setFilter = (key, val) => setValueFilters({ ...valueFilters, [key]: val })
 
   return (
-    <div>
+    <div className="listview">
       <AddPropertyBar onChange={load} />
       <div className="list-toolbar">
         <FilterSetPicker />

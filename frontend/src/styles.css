@@ -7,12 +7,15 @@
   --accent: #1565c0;
 }
 * { box-sizing: border-box; }
+html, body, #root { height: 100%; }
 body {
   margin: 0;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   background: var(--bg);
   color: var(--ink);
 }
+/* App fills the window; the content area flexes to fill remaining height. */
+.app { display: flex; flex-direction: column; min-height: 100vh; }
 a { color: var(--accent); text-decoration: none; cursor: pointer; }
 a:hover { text-decoration: underline; }
 button { cursor: pointer; }
@@ -34,7 +37,7 @@ button { cursor: pointer; }
 .topbar nav { display: flex; gap: 12px; }
 .topbar nav a.active { font-weight: 600; border-bottom: 2px solid var(--accent); }
 .who { color: var(--muted); }
-.content { padding: 20px; max-width: 1200px; margin: 0 auto; }
+.content { padding: 20px; flex: 1; display: flex; flex-direction: column; min-height: 0; }
 .link-btn { background: none; border: none; color: var(--accent); padding: 0 4px; }
 .link-btn.danger { color: #c62828; }
 
@@ -57,14 +60,18 @@ button { cursor: pointer; }
 .tag.sm { font-size: 0.75em; margin-right: 4px; }
 
 /* ── Grid table ── */
-.grid { width: 100%; border-collapse: collapse; background: var(--card); border-radius: 8px; overflow: hidden; }
+.grid { width: 100%; border-collapse: collapse; background: var(--card); border-radius: 8px; }
 .grid th, .grid td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); }
 .grid th { background: #fafaf9; font-size: 0.8em; text-transform: uppercase; color: var(--muted); }
+/* Keep headers + per-column filters visible while the list scrolls. */
+.grid thead th { position: sticky; z-index: 2; }
+.grid thead tr:first-child th { top: 0; }
+.grid thead tr.filter-row th { top: 30px; }
 .grid.sm td, .grid.sm th { padding: 4px 8px; font-size: 0.9em; }
 .grid tr.inactive { opacity: 0.5; }
 
 /* sortable headers + per-column filter row */
-.table-scroll { overflow-x: auto; }
+.table-scroll { flex: 1; min-height: 0; overflow: auto; }
 .grid th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
 .grid th.sortable:hover { color: var(--ink); }
 .grid .filter-row th { background: #fff; padding: 4px 6px; }
@@ -77,8 +84,11 @@ button { cursor: pointer; }
 .badge.off_market { background: #757575; }
 .badge.coming_soon { background: #1565c0; }
 
+/* ── List & Map fill the content area ── */
+.listview, .mapview { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+
 /* ── Map ── */
-.map { width: 100%; height: 70vh; border-radius: 8px; }
+.map { width: 100%; flex: 1; min-height: 420px; border-radius: 8px; }
 .region-bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
 .region-bar > button { padding: 6px 12px; }
 .region-msg { font-size: 0.9em; }
@@ -97,6 +107,8 @@ button { cursor: pointer; }
 
 /* ── List toolbar + faded (non-matching) rows ── */
 .list-toolbar { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+.addr-cell { display: inline-flex; align-items: center; gap: 6px; }
+.addr-cell a[target="_blank"] { text-decoration: none; }
 .grid tr.faded td { opacity: 0.35; }
 .grid tr.faded .badge, .grid tr.faded .tag { opacity: 0.55; }
 

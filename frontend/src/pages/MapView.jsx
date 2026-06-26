@@ -182,7 +182,7 @@ export default function MapView() {
   const setFilterVal = (key, val) => setValueFilters({ ...valueFilters, [key]: val })
 
   return (
-    <div>
+    <div className="mapview">
       <div className="region-bar">
         <FilterSetPicker />
         <button onClick={() => setShowFilters((v) => !v)}>
