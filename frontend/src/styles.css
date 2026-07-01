@@ -101,6 +101,19 @@ button { cursor: pointer; }
 .filter-field { display: flex; flex-direction: column; gap: 2px; font-size: 0.8em; color: var(--muted); }
 .filter-field input { padding: 4px 6px; }
 
+/* ── Bottom status bar ── */
+.statusbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 900; display: flex; align-items: center; gap: 12px;
+  padding: 8px 16px; background: var(--ink); color: #fff; font-size: 0.9em; box-shadow: 0 -2px 10px rgba(0,0,0,0.2); }
+.statusbar.done { background: #2e7d32; }
+.statusbar .muted { color: rgba(255,255,255,0.75); }
+.statusbar-text { font-weight: 600; }
+.statusbar-track { flex: 1; max-width: 320px; height: 6px; background: rgba(255,255,255,0.25); border-radius: 3px; overflow: hidden; }
+.statusbar-fill { height: 100%; background: #fff; transition: width 0.2s; }
+.statusbar-errors { color: #ffcc80; }
+.statusbar .link-btn { color: #fff; margin-left: auto; }
+.statusbar-spinner { width: 14px; height: 14px; border: 2px solid rgba(255,255,255,0.4); border-top-color: #fff; border-radius: 50%; animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
 /* ── Search button + modal ── */
 .search-btn { padding: 5px 12px; border: 1px solid var(--accent); color: var(--accent); background: var(--card); border-radius: 6px; font-weight: 600; }
 .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.35); display: flex; align-items: flex-start; justify-content: center; z-index: 1000; padding: 6vh 16px; }

@@ -112,6 +112,34 @@ def test_refresh_updates_status_and_finds_new(client, db_session, monkeypatch):
     assert r1.origin == "region_search"  # provenance unchanged by refresh
 
 
+def test_refresh_stream_emits_progress(client, db_session, monkeypatch):
+    """/ingest/refresh/stream yields NDJSON start → city → done events."""
+    import json
+    from app.models import Property
+    from app.services import realtor as realtor_mod
+
+    db_session.add(Property(
+        source="realtor", source_id="R1", status="for_sale",
+        city="Santa Rosa", state="CA", latitude=38.45, longitude=-122.70,
+    ))
+    db_session.commit()
+    monkeypatch.setattr(geo, "cities_in_shape", lambda shape, max_cities=20: (["Santa Rosa, CA"], False))
+    monkeypatch.setattr(realtor_mod, "search", lambda *a, **k: [])
+
+    r = client.post(
+        "/ingest/refresh/stream",
+        json={"search_regions": [{"kind": "circle", "center": [38.44, -122.71], "radius_mi": 10}]},
+    )
+    assert r.status_code == 200
+    events = [json.loads(l) for l in r.text.strip().split("\n") if l.strip()]
+    kinds = [e["event"] for e in events]
+    assert kinds[0] == "start"
+    assert "city" in kinds
+    assert kinds[-1] == "done"
+    city_evt = next(e for e in events if e["event"] == "city")
+    assert city_evt["index"] == 1 and city_evt["total"] >= 1
+
+
 def test_region_invalid_shape_rejected(client):
     r = client.post("/ingest/region", json={"shapes": [{"kind": "circle"}]})
     assert r.status_code == 400

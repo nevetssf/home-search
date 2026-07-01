@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { NavLink, Outlet } from 'react-router-dom'
 import { useAuth } from './auth'
 import SearchModal from './components/SearchModal'
+import StatusBar from './components/StatusBar'
 
 export default function App() {
   const { user, signOut } = useAuth()
@@ -25,6 +26,7 @@ export default function App() {
         <Outlet />
       </main>
       {searchOpen && <SearchModal onClose={() => setSearchOpen(false)} />}
+      <StatusBar />
     </div>
   )
 }

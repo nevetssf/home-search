@@ -2,8 +2,9 @@
 // and runs a search over either the map-drawn search regions OR a typed
 // city/ZIP. Criteria are persisted in the view store. Realtor.com only for now.
 import { useState } from 'react'
-import { ingestRealtorSearch, refreshListings } from '../api'
+import { ingestRealtorSearch } from '../api'
 import { useViewState } from '../regions'
+import { runRefreshWithStatus } from '../search'
 
 const STATUSES = [
   ['for_sale', 'For sale'], ['pending', 'Pending'], ['sold', 'Sold'],
@@ -11,7 +12,7 @@ const STATUSES = [
 const numOrNull = (v) => (v === '' || v == null ? null : Number(v))
 
 export default function SearchModal({ onClose }) {
-  const { search: regions, searchCriteria, setSearchCriteria, bumpData } = useViewState()
+  const { search: regions, searchCriteria, setSearchCriteria, bumpData, setStatus } = useViewState()
   const [c, setC] = useState({ listing_type: 'for_sale', ...searchCriteria })
   const [loc, setLoc] = useState('')
   const [radius, setRadius] = useState('')
@@ -36,25 +37,24 @@ export default function SearchModal({ onClose }) {
     const crit = criteria()
     setSearchCriteria(crit)  // persist cleaned criteria for the map/Update buttons
     try {
-      let res
       if (loc.trim()) {
-        // Typed area: a targeted search of that city/ZIP.
-        res = await ingestRealtorSearch({ location: loc.trim(), radius: numOrNull(radius) || undefined, ...crit })
+        // Typed area: a targeted single search of that city/ZIP (quick).
+        setStatus({ active: true, text: `Searching ${loc.trim()}…`, total: 0 })
+        const res = await ingestRealtorSearch({ location: loc.trim(), radius: numOrNull(radius) || undefined, ...crit })
+        setStatus({ active: false, text: `Done: ${res.created} new, ${res.updated} updated.`, errors: (res.errors || []).length })
+        bumpData()
+        onClose()
       } else if (regions.length) {
-        // Map regions: find new AND refresh existing statuses (same as Update).
-        res = await refreshListings(regions, crit)
+        // Map regions: streamed find-new + refresh-existing (same as Update).
+        onClose()  // let the bottom status bar show progress
+        await runRefreshWithStatus(regions, crit, { setStatus, bumpData })
       } else {
         setBusy(false)
         setMsg('Draw a search region on the Map, or enter a city / ZIP above.')
         return
       }
-      const bits = [`${res.created} new`, `${res.updated} updated`]
-      if (res.status_changed) bits.push(`${res.status_changed} status changes`)
-      const capped = (res.errors || []).find((e) => e.includes('smaller regions') || e.includes('areas'))
-      setMsg(`Done: ${bits.join(', ')}.${capped ? ' (search area was capped)' : ''}`)
-      bumpData()  // reload List/Map
     } catch (e) {
-      setMsg(e.response?.status === 503 ? 'Search unavailable (Realtor disabled).' : 'Search failed.')
+      setMsg(e.response?.status === 503 ? 'Search unavailable.' : 'Search failed.')
     } finally {
       setBusy(false)
     }

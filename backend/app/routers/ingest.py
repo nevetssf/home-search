@@ -5,12 +5,14 @@ photos locally (persist + privacy), upsert by ``(source, source_id)``. Any API
 failure degrades to HTTP 503 / partial result so manual entry stays the
 graceful fallback.
 """
+import json
 import re
 from datetime import datetime
 from typing import Optional
 
 import httpx
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from .. import schemas
@@ -505,27 +507,13 @@ def ingest_region(
     return out
 
 
-@router.post("/refresh", response_model=schemas.IngestResult)
-def ingest_refresh(
-    payload: schemas.RefreshIngest,
-    db: Session = Depends(get_db),
-    _: User = Depends(get_current_user),
-):
-    """The "Update" button: find newly-listed properties within the search
-    region(s) and refresh the status/details of existing properties (keyless,
-    via Realtor.com).
-
-    One city-search pass covers both: cities inside the search regions (to find
-    new for-sale listings) plus the cities of existing properties (to detect
-    for_sale → pending/sold transitions). Existing properties are matched by
-    source_id and updated in place; new listings are only created when they fall
-    inside a search region, so the DB isn't flooded with a whole city."""
+def _refresh_setup(db: Session, payload: schemas.RefreshIngest):
+    """Resolve (sources, region_shapes, cities, statuses, capped) for a refresh."""
     sources = _enabled_sources(payload.sources)
     if not sources:
         raise HTTPException(503, "No search sources available (enable Realtor or set RAPIDAPI_KEY).")
 
     region_shapes = [_to_shape(s) for s in payload.search_regions]
-
     existing = db.query(Property).filter(Property.archived.is_(False)).all()
 
     # Cities: inside the search regions (new) + those of existing props (status
@@ -551,24 +539,38 @@ def ingest_refresh(
         capped = True
         cities = cities[: payload.max_cities]
 
-    out = schemas.IngestResult()
-    # Search these statuses so for_sale → pending/sold transitions are visible.
     statuses = (
         ["for_sale", "pending", "sold"] if payload.refresh_existing
         else [payload.listing_type]
     )
-    processed: set[str] = set()
+    return sources, region_shapes, cities, statuses, capped
 
+
+def _refresh_events(db, payload, sources, region_shapes, cities, statuses, capped):
+    """Run the refresh, yielding progress event dicts (one per city) so callers
+    can stream them. Commits per city so partial results persist."""
+    created = updated = status_changed = 0
+    errors: list[str] = []
+    processed: set[str] = set()
+    total = len(sources) * len(cities)
+
+    yield {"event": "start", "cities": len(cities), "sources": sources, "total": total}
+
+    idx = 0
     for source in sources:
         for city in cities:
+            idx += 1
+            c_new = c_upd = c_stat = 0
             for lt in statuses:
                 try:
                     listings = _search_city(source, city, payload, lt)
                 except (RealtorUnavailable, ZillowUnavailable) as e:
-                    out.errors.append(f"{source}/{city}/{lt}: {str(e)[:80]}")
+                    errors.append(f"{source}/{city}/{lt}: {str(e)[:80]}")
+                    yield {"event": "error", "message": errors[-1]}
                     continue
                 except Exception as e:
-                    out.errors.append(f"{source}/{city}/{lt}: {str(e)[:80]}")
+                    errors.append(f"{source}/{city}/{lt}: {str(e)[:80]}")
+                    yield {"event": "error", "message": errors[-1]}
                     continue
                 for listing in listings:
                     pkey = f"{source}:{listing.source_id or listing.address}"
@@ -580,34 +582,80 @@ def ingest_refresh(
                         and listing.latitude is not None
                         and any(geo.contains(s, listing.latitude, listing.longitude) for s in region_shapes)
                     )
-                    # Refresh existing anywhere; create new only inside a region.
                     if not match and not (in_region and lt == "for_sale"):
                         continue
                     processed.add(pkey)
                     prev_status = match.status if match else None
                     try:
                         with db.begin_nested():
-                            prop, created = _upsert(
+                            prop, was_new = _upsert(
                                 db, source, listing, download=False, origin="region_search"
                             )
                     except Exception as e:
-                        out.errors.append(str(e)[:100])
+                        errors.append(str(e)[:80])
                         continue
-                    if created:
-                        out.created += 1
-                        out.property_ids.append(prop.id)
+                    if was_new:
+                        created += 1
+                        c_new += 1
                     else:
-                        out.updated += 1
+                        updated += 1
+                        c_upd += 1
                         if prev_status is not None and prop.status != prev_status:
-                            out.status_changed += 1
-    db.commit()
+                            status_changed += 1
+                            c_stat += 1
+            db.commit()  # persist this city's results before reporting progress
+            yield {
+                "event": "city", "source": source, "city": city, "index": idx, "total": total,
+                "new": c_new, "updated": c_upd, "status_changed": c_stat,
+                "totals": {"created": created, "updated": updated, "status_changed": status_changed},
+            }
 
     if capped:
-        out.errors.append(
-            f"Searched up to {payload.max_cities} areas; some regions/cities may "
-            "be uncovered. Narrow the search regions for full coverage."
+        errors.append(
+            f"Searched up to {payload.max_cities} areas; narrow the search regions "
+            "for full coverage."
         )
-    return out
+    yield {
+        "event": "done", "created": created, "updated": updated,
+        "status_changed": status_changed, "skipped": 0, "errors": errors,
+    }
+
+
+@router.post("/refresh", response_model=schemas.IngestResult)
+def ingest_refresh(
+    payload: schemas.RefreshIngest,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    """The "Update"/Search action: find new listings in the search region(s) and
+    refresh existing properties' statuses (for_sale → pending/sold). See
+    ``/refresh/stream`` for a live per-city progress stream."""
+    setup = _refresh_setup(db, payload)
+    done = None
+    for evt in _refresh_events(db, payload, *setup):
+        if evt["event"] == "done":
+            done = evt
+    return schemas.IngestResult(
+        created=done["created"], updated=done["updated"],
+        status_changed=done["status_changed"], skipped=done["skipped"], errors=done["errors"],
+    )
+
+
+@router.post("/refresh/stream")
+def ingest_refresh_stream(
+    payload: schemas.RefreshIngest,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    """Same as /refresh, but streams newline-delimited JSON progress events
+    (start / city / error / done) so the UI can show a live status bar."""
+    setup = _refresh_setup(db, payload)
+
+    def gen():
+        for evt in _refresh_events(db, payload, *setup):
+            yield json.dumps(evt) + "\n"
+
+    return StreamingResponse(gen(), media_type="application/x-ndjson")
 
 
 @router.post("/redfin/csv", response_model=schemas.IngestResult)

@@ -26,6 +26,7 @@ export function RegionsProvider({ children }) {
   const [mapFade, setMapFade] = useState(init.mapFade ?? true)
   const [searchCriteria, setSearchCriteria] = useState(init.searchCriteria || {})
   const [dataVersion, setDataVersion] = useState(0)  // bump to make views reload
+  const [status, setStatus] = useState(null)  // bottom status bar: {active,text,...}
 
   useEffect(() => {
     localStorage.setItem(
@@ -42,6 +43,7 @@ export function RegionsProvider({ children }) {
         mapFade, setMapFade,
         searchCriteria, setSearchCriteria,
         dataVersion, bumpData: () => setDataVersion((v) => v + 1),
+        status, setStatus,
       }}
     >
       {children}

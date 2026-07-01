@@ -115,6 +115,43 @@ export const searchRegion = (shapes, opts = {}) =>
 export const refreshListings = (searchRegions = [], criteria = {}) =>
   api.post('/ingest/refresh', { search_regions: searchRegions, refresh_existing: true, ...criteria }).then((r) => r.data)
 
+// Streaming variant: calls onEvent(evt) for each NDJSON progress event
+// (start / city / error / done). Uses fetch since axios can't stream in-browser.
+// Returns the final "done" event.
+export async function refreshListingsStream(searchRegions = [], criteria = {}, onEvent = () => {}) {
+  const token = localStorage.getItem('token')
+  const base = import.meta.env.VITE_API_URL || '/api'
+  const resp = await fetch(`${base}/ingest/refresh/stream`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    body: JSON.stringify({ search_regions: searchRegions, refresh_existing: true, ...criteria }),
+  })
+  if (!resp.ok) {
+    const err = new Error('refresh failed')
+    err.response = { status: resp.status }
+    throw err
+  }
+  const reader = resp.body.getReader()
+  const decoder = new TextDecoder()
+  let buf = ''
+  let done = null
+  for (;;) {
+    const { done: finished, value } = await reader.read()
+    if (finished) break
+    buf += decoder.decode(value, { stream: true })
+    let nl
+    while ((nl = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, nl).trim()
+      buf = buf.slice(nl + 1)
+      if (!line) continue
+      const evt = JSON.parse(line)
+      onEvent(evt)
+      if (evt.event === 'done') done = evt
+    }
+  }
+  return done
+}
+
 // ── Filter sets (named, persisted filter criteria) ────────────────────────────
 export const listFilterSets = () => api.get('/filter-sets').then((r) => r.data)
 export const createFilterSet = (body) => api.post('/filter-sets', body).then((r) => r.data)

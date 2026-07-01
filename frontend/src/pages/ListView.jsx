@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { deleteProperty, listProperties, refreshListings } from '../api'
+import { deleteProperty, listProperties } from '../api'
+import { runRefreshWithStatus } from '../search'
 import AddPropertyBar from '../components/AddPropertyBar'
 import FilterSetPicker from '../components/FilterSetPicker'
 import { useViewState } from '../regions'
@@ -36,9 +37,8 @@ function renderCell(col, p) {
 export default function ListView() {
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
-  const { sort, setSort, listFade, setListFade, search: searchRegions, searchCriteria, dataVersion } = useViewState()
+  const { sort, setSort, listFade, setListFade, search: searchRegions, searchCriteria, dataVersion, setStatus, bumpData } = useViewState()
   const [updating, setUpdating] = useState(false)
-  const [updateMsg, setUpdateMsg] = useState('')
   const {
     valueFilters, setValueFilters, filterRegions, setFilterRegions,
   } = useFilterSets()
@@ -61,15 +61,10 @@ export default function ListView() {
 
   const update = async () => {
     setUpdating(true)
-    setUpdateMsg('Updating — searching for new listings and refreshing statuses…')
     try {
-      const res = await refreshListings(searchRegions || [], searchCriteria || {})
-      const bits = [`${res.created} new`, `${res.updated} updated`]
-      if (res.status_changed) bits.push(`${res.status_changed} status changes`)
-      setUpdateMsg(`Done: ${bits.join(', ')}.`)
-      load()
-    } catch (e) {
-      setUpdateMsg(e.response?.status === 503 ? 'Update unavailable (Realtor disabled).' : 'Update failed.')
+      await runRefreshWithStatus(searchRegions || [], searchCriteria || {}, { setStatus, bumpData })
+    } catch {
+      /* status bar shows the error */
     } finally {
       setUpdating(false)
     }
@@ -106,7 +101,6 @@ export default function ListView() {
           title="Find new listings in your map search regions and refresh existing statuses">
           {updating ? 'Updating…' : 'Update'}
         </button>
-        {updateMsg && <span className="muted">{updateMsg}</span>}
         <span className="muted">
           {filtersActive ? `${matchCount} of ${rows.length} match` : `${rows.length} properties`}
         </span>
