@@ -18,7 +18,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from ..config import settings
-from .zillow import NormalizedListing, _to_float
+from .zillow import NormalizedListing, _to_float, sqft_to_acres
 
 
 class RealtorUnavailable(RuntimeError):
@@ -94,7 +94,7 @@ def normalize(prop: Any) -> NormalizedListing:
         beds=_to_float(getattr(desc, "beds", None)),
         baths=_baths(desc),
         sqft=_to_float(getattr(desc, "sqft", None)),
-        lot_size=_to_float(getattr(desc, "lot_sqft", None)),
+        lot_size=sqft_to_acres(getattr(desc, "lot_sqft", None)),
         year_built=int(desc.year_built) if getattr(desc, "year_built", None) else None,
         property_type=_as_str(getattr(desc, "style", None) or getattr(desc, "type", None)),
         status=_STATUS_MAP.get(str(getattr(prop, "status", "") or "").upper(), "for_sale"),

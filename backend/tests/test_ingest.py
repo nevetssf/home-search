@@ -50,7 +50,7 @@ def test_redfin_csv_parse():
     csv_bytes = (
         b"ADDRESS,CITY,STATE OR PROVINCE,ZIP OR POSTAL CODE,PRICE,BEDS,BATHS,"
         b"SQUARE FEET,LOT SIZE,YEAR BUILT,PROPERTY TYPE,LATITUDE,LONGITUDE,MLS#,URL\n"
-        b"1 Oak Rd,Healdsburg,CA,95448,\"1,500,000\",4,3,2500,1.5,2005,"
+        b"1 Oak Rd,Healdsburg,CA,95448,\"1,500,000\",4,3,2500,43560,2005,"
         b"Single Family Residential,38.6,-122.9,ML123,http://redfin/x\n"
     )
     rows = redfin_csv.parse_csv(csv_bytes)
@@ -59,7 +59,7 @@ def test_redfin_csv_parse():
     assert row.city == "Healdsburg"
     assert row.price == 1500000
     assert row.beds == 4
-    assert row.lot_size == 1.5
+    assert row.lot_size == 1.0  # 43,560 sq ft → 1 acre
     assert row.source_id == "ML123"
 
 

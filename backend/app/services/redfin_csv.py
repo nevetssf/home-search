@@ -63,8 +63,9 @@ def parse_csv(content: bytes) -> List[NormalizedRow]:
     reader = csv.DictReader(io.StringIO(text))
     rows: List[NormalizedRow] = []
     for row in reader:
-        # Redfin's acres column; sqft lot converted to acres if needed.
-        lot_acres = _f(row, "LOT SIZE")
+        # Redfin's "LOT SIZE" is in square feet; convert to our acres unit.
+        lot_sqft = _f(row, "LOT SIZE")
+        lot_acres = round(lot_sqft / 43560.0, 3) if lot_sqft is not None else None
         rows.append(
             NormalizedRow(
                 source_id=_s(row, "MLS#", "LISTING ID"),

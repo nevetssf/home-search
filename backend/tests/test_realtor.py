@@ -58,7 +58,8 @@ def test_normalize_maps_fields():
     assert n.price == 1450000
     assert n.beds == 4
     assert n.baths == 3.5  # 3 full + 1 half
-    assert n.sqft == 2600 and n.lot_size == 8000
+    assert n.sqft == 2600
+    assert n.lot_size == round(8000 / 43560, 3)  # lot_sqft → acres
     assert n.year_built == 2009
     assert n.property_type == "SINGLE_FAMILY"
     assert n.status == "pending"  # CONTINGENT → pending

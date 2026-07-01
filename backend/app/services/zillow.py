@@ -68,6 +68,15 @@ def _to_float(v: Any) -> Optional[float]:
         return None
 
 
+ACRE_SQFT = 43560.0
+
+
+def sqft_to_acres(v: Any) -> Optional[float]:
+    """Convert a square-foot lot size to acres (our canonical lot_size unit)."""
+    f = _to_float(v)
+    return round(f / ACRE_SQFT, 3) if f is not None else None
+
+
 def extract_zpid(url: str) -> Optional[str]:
     """Pull the zpid out of a Zillow URL like .../12345678_zpid/."""
     m = re.search(r"/(\d+)_zpid", url)
@@ -116,6 +125,14 @@ def normalize(payload: Dict[str, Any]) -> NormalizedListing:
     if not photos and payload.get("imgSrc"):
         photos.append(payload["imgSrc"])
 
+    # Lot size → acres. Zillow gives a value + unit; convert when it's sqft.
+    lot_unit = str(payload.get("lotAreaUnits") or payload.get("lotAreaUnit") or "").lower()
+    lot_size = _to_float(payload.get("lotAreaValue"))
+    if lot_size is not None and ("sqft" in lot_unit or "square" in lot_unit or "feet" in lot_unit):
+        lot_size = round(lot_size / ACRE_SQFT, 3)
+    elif lot_size is None and payload.get("lotSize"):  # lotSize is square feet
+        lot_size = sqft_to_acres(payload.get("lotSize"))
+
     return NormalizedListing(
         source_id=str(payload.get("zpid")) if payload.get("zpid") else None,
         source_url=payload.get("url") or payload.get("hdpUrl"),
@@ -130,7 +147,7 @@ def normalize(payload: Dict[str, Any]) -> NormalizedListing:
         beds=_to_float(payload.get("bedrooms")),
         baths=_to_float(payload.get("bathrooms")),
         sqft=_to_float(payload.get("livingArea") or payload.get("livingAreaValue")),
-        lot_size=_to_float(payload.get("lotAreaValue")),
+        lot_size=lot_size,
         year_built=int(payload["yearBuilt"]) if payload.get("yearBuilt") else None,
         property_type=payload.get("homeType") or payload.get("propertyTypeDimension"),
         status=_STATUS_MAP.get(str(payload.get("homeStatus", "")).upper(), "for_sale"),
