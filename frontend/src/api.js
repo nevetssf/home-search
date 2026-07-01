@@ -34,8 +34,10 @@ export const changePassword = (current_password, new_password) =>
   api.patch('/auth/me/password', { current_password, new_password })
 
 // ── Properties ────────────────────────────────────────────────────────────────
-export const listProperties = (params) =>
-  api.get('/properties', { params }).then((r) => r.data)
+// The List and Map filter/plot everything client-side, so load all properties
+// (default limit high; callers can still override).
+export const listProperties = (params = {}) =>
+  api.get('/properties', { params: { limit: 20000, ...params } }).then((r) => r.data)
 export const getProperty = (id) => api.get(`/properties/${id}`).then((r) => r.data)
 export const createProperty = (body) =>
   api.post('/properties', body).then((r) => r.data)
