@@ -1,9 +1,10 @@
 // Map view (Leaflet + OpenStreetMap, no API key). Two region sets, persisted
 // across views via the regions store:
-//   • SEARCH (blue) — "Search this area" pulls listings from these regions.
+//   • SEARCH (blue) — the areas the ⌕ Search pop-up / Update button pull from.
 //   • FILTER (orange) — narrows which properties show in the List view.
 // Draw with the toolbar (top-right) into whichever set is active; toggle each
-// set's visibility; click a region to remove it.
+// set's visibility; click a region to remove it. Running the search happens
+// from the ⌕ Search pop-up (top nav) or the list's Update button.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
@@ -14,7 +15,7 @@ import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import 'leaflet-draw'
 import 'leaflet-draw/dist/leaflet.draw.css'
-import { listProperties, searchRegion } from '../api'
+import { listProperties } from '../api'
 import { useViewState } from '../regions'
 import { useFilterSets } from '../filterSets'
 import { passesValueFilters, useFilterColumns } from '../filters'
@@ -124,7 +125,7 @@ function FitBounds({ points }) {
 }
 
 export default function MapView() {
-  const { search, setSearch, mapFade, setMapFade, searchCriteria, dataVersion } = useViewState()
+  const { search, setSearch, mapFade, setMapFade, dataVersion } = useViewState()
   const {
     valueFilters, setValueFilters, filterRegions: filter, setFilterRegions: setFilter,
   } = useFilterSets()
@@ -133,8 +134,6 @@ export default function MapView() {
   const [active, setActive] = useState('search')  // which set new shapes go into
   const [show, setShow] = useState({ search: true, filter: true })
   const [showFilters, setShowFilters] = useState(false)
-  const [searching, setSearching] = useState(false)
-  const [msg, setMsg] = useState('')
   const savedView = useRef(loadView())  // last viewport, read once on mount
 
   const load = useCallback(
@@ -158,24 +157,6 @@ export default function MapView() {
   )
   const removeFrom = (set) => (i) =>
     (set === 'search' ? setSearch : setFilter)((s) => s.filter((_, j) => j !== i))
-
-  const runSearch = async () => {
-    if (!search.length) return
-    setSearching(true)
-    setMsg('Searching Realtor.com within the search region(s)…')
-    try {
-      const res = await searchRegion(search, searchCriteria || {})
-      const capped = (res.errors || []).find((e) => e.includes('smaller regions'))
-      const bits = [`added ${res.created} new`, `${res.updated} updated`]
-      if (res.skipped) bits.push(`${res.skipped} outside region`)
-      setMsg(bits.join(', ') + (capped ? ` — ${capped}` : ''))
-      await load()
-    } catch (e) {
-      setMsg(e.response?.status === 503 ? 'Realtor search is unavailable.' : 'Region search failed.')
-    } finally {
-      setSearching(false)
-    }
-  }
 
   const located = rows.filter((p) => p.latitude != null && p.longitude != null)
   const points = located.map((p) => [p.latitude, p.longitude])
@@ -234,13 +215,12 @@ export default function MapView() {
           <input type="checkbox" checked={show.filter} onChange={(e) => setShow((v) => ({ ...v, filter: e.target.checked }))} />
           <span style={{ color: SET_COLOR.filter }}>● filter ({filter.length})</span>
         </label>
-        <button onClick={runSearch} disabled={!search.length || searching}>
-          {searching ? 'Searching…' : `Search this area${search.length ? ` (${search.length})` : ''}`}
-        </button>
+        <span className="muted">
+          · draw <b style={{ color: SET_COLOR.search }}>search</b> regions, then run ⌕ Search (top nav) or Update
+        </span>
         {filter.length > 0 && (
           <span className="muted">· filter regions narrow List + Map ({filter.length})</span>
         )}
-        {msg && <span className="region-msg">{msg}</span>}
       </div>
 
       <MapContainer
