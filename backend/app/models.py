@@ -57,7 +57,10 @@ class Property(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     # Source / cache
-    source = Column(String, default="manual")  # zillow | redfin | realtor | manual
+    source = Column(String, default="manual")  # zillow | redfin | realtor | manual (data provider)
+    # How it entered the app: manual | url | realtor_search | region_search |
+    # zillow_search | redfin_csv (ingestion provenance).
+    origin = Column(String, index=True, nullable=True)
     source_url = Column(String, nullable=True)
     source_id = Column(String, index=True, nullable=True)  # e.g. zpid
     raw_payload = Column(JSON, nullable=True)  # full cached API response
@@ -108,6 +111,36 @@ class Property(Base):
     distances = relationship(
         "PlaceDistance", back_populates="property", cascade="all, delete-orphan"
     )
+    sources = relationship(
+        "PropertySource", back_populates="property", cascade="all, delete-orphan"
+    )
+
+
+class PropertySource(Base):
+    """A listing-source link for a property. One physical property can be listed
+    on several sources (Realtor, Zillow, …); cross-source duplicates are merged
+    onto one Property with multiple PropertySource rows. The Property's own
+    source/source_id/etc. fields mirror the first (primary) source for display.
+    """
+
+    __tablename__ = "property_sources"
+    __table_args__ = (
+        UniqueConstraint("source", "source_id", name="uq_property_source"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    property_id = Column(
+        Integer, ForeignKey("properties.id", ondelete="CASCADE"), index=True
+    )
+    source = Column(String, nullable=False)  # realtor | zillow | redfin | manual
+    source_id = Column(String, index=True, nullable=True)
+    source_url = Column(String, nullable=True)
+    origin = Column(String, nullable=True)  # how this source link was added
+    raw_payload = Column(JSON, nullable=True)
+    last_synced_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    property = relationship("Property", back_populates="sources")
 
 
 class StatusHistory(Base):

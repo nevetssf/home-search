@@ -22,6 +22,7 @@ from ..models import (
     CriterionValue,
     Note,
     Property,
+    PropertySource,
     PropertyTag,
     StatusHistory,
     Tag,
@@ -223,6 +224,7 @@ def get_property(
         selectinload(Property.notes),
         selectinload(Property.media),
         selectinload(Property.status_history),
+        selectinload(Property.sources),
     ).get(property_id)
     if not prop:
         raise HTTPException(404, "Property not found")
@@ -241,10 +243,11 @@ def create_property(
     status_val = data.pop("status", None) or "for_sale"
     if status_val not in schemas.VALID_STATUSES:
         raise HTTPException(400, f"status must be one of {schemas.VALID_STATUSES}")
-    prop = Property(**data, status=status_val)
+    prop = Property(**data, status=status_val, origin="manual")
     db.add(prop)
     db.flush()
     db.add(StatusHistory(property_id=prop.id, status=status_val, source="manual"))
+    db.add(PropertySource(property_id=prop.id, source="manual", origin="manual"))
     db.commit()
     db.refresh(prop)
     return prop

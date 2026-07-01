@@ -17,8 +17,8 @@ from .. import schemas
 from ..auth import get_current_user
 from ..config import settings
 from ..database import get_db
-from ..models import Media, Property, StatusHistory, User
-from ..services import geo, realtor, redfin_csv, scrape
+from ..models import Media, Property, PropertySource, StatusHistory, User
+from ..services import dedup, geo, realtor, redfin_csv, scrape
 from ..services.realtor import RealtorUnavailable
 from ..services.scrape import ScrapeBlocked
 from ..services.storage import get_storage, make_key
@@ -137,40 +137,74 @@ def _download_photos(db: Session, prop: Property, urls: list[str], limit: int = 
 
 
 def _upsert(
-    db: Session, source: str, listing: NormalizedListing, download: bool
+    db: Session,
+    source: str,
+    listing: NormalizedListing,
+    download: bool,
+    origin: Optional[str] = None,
 ) -> tuple[Property, bool]:
-    """Create or update a property from a normalized listing. Returns (prop, created)."""
-    prop: Optional[Property] = None
+    """Create or update a property from a normalized listing. Returns (prop, created).
+
+    ``origin`` records how the property first entered the app; set only on
+    creation so a later refresh never rewrites the original provenance.
+
+    Resolution order: (1) same source+id → update that source link's property;
+    (2) cross-source duplicate (dedup by address/coords) → attach a new source
+    link to the existing property; (3) otherwise create a new property. The
+    Property's own source_*/raw fields mirror the primary (first) source."""
+    now = datetime.utcnow()
+
+    link: Optional[PropertySource] = None
     if listing.source_id:
-        prop = (
-            db.query(Property)
-            .filter(Property.source == source, Property.source_id == listing.source_id)
+        link = (
+            db.query(PropertySource)
+            .filter(PropertySource.source == source, PropertySource.source_id == listing.source_id)
             .first()
         )
-    created = prop is None
-    if created:
-        prop = Property(source=source, source_id=listing.source_id)
-        db.add(prop)
 
+    if link:
+        prop = link.property
+        created = False
+    else:
+        prop = dedup.find_matching_property(db, listing)
+        created = prop is None
+        if created:
+            prop = Property(
+                source=source, source_id=listing.source_id,
+                origin=origin, source_url=listing.source_url,
+            )
+            db.add(prop)
+            db.flush()  # assign prop.id for the FK below
+        link = PropertySource(
+            property_id=prop.id, source=source, source_id=listing.source_id,
+            source_url=listing.source_url, origin=origin, raw_payload=listing.raw,
+            last_synced_at=now,
+        )
+        db.add(link)
+
+    # Refresh this source link.
+    link.source_url = listing.source_url or link.source_url
+    link.raw_payload = listing.raw or link.raw_payload
+    link.last_synced_at = now
+
+    # Canonical property facts — latest sync wins.
     for f in _LISTING_FIELDS:
         val = getattr(listing, f, None)
         if val is not None:
             setattr(prop, f, val)
-    prop.source_url = listing.source_url or prop.source_url
-    prop.raw_payload = listing.raw or prop.raw_payload
-    prop.last_synced_at = datetime.utcnow()
+    prop.last_synced_at = now
+    prop.source_url = prop.source_url or listing.source_url
+    prop.raw_payload = prop.raw_payload or listing.raw
 
-    if prop.status != listing.status:
-        db.add(
-            StatusHistory(
-                property_id=prop.id if prop.id else None,
-                status=listing.status,
-                source=source,
-            )
-        )
+    # Status history (append-only on change; always record the initial status).
+    if created:
+        prop.status = listing.status
+        db.add(StatusHistory(property_id=prop.id, status=listing.status, source=source))
+    elif prop.status != listing.status:
+        db.add(StatusHistory(property_id=prop.id, status=listing.status, source=source))
         prop.status = listing.status
 
-    db.flush()  # ensure prop.id for media / history
+    db.flush()
 
     if created and download and listing.photo_urls:
         _download_photos(db, prop, listing.photo_urls)
@@ -178,8 +212,10 @@ def _upsert(
     return prop, created
 
 
-def _ingest_one(db: Session, source: str, listing: NormalizedListing, download: bool):
-    prop, created = _upsert(db, source, listing, download)
+def _ingest_one(
+    db: Session, source: str, listing: NormalizedListing, download: bool, origin: str
+):
+    prop, created = _upsert(db, source, listing, download, origin=origin)
     db.commit()
     return schemas.IngestResult(
         created=int(created), updated=int(not created), property_ids=[prop.id]
@@ -208,7 +244,7 @@ def ingest_url(
     else:
         raise HTTPException(400, "URL must be a zillow.com or redfin.com listing")
     listing.source_url = listing.source_url or payload.url
-    return _ingest_one(db, source, listing, download_photos)
+    return _ingest_one(db, source, listing, download_photos, origin="url")
 
 
 @router.post("/zillow/url", response_model=schemas.IngestResult)
@@ -220,7 +256,7 @@ def ingest_zillow_url(
 ):
     source, listing = _resolve_zillow_listing(payload.url)
     listing.source_url = listing.source_url or payload.url
-    return _ingest_one(db, source, listing, download_photos)
+    return _ingest_one(db, source, listing, download_photos, origin="url")
 
 
 @router.post("/redfin/url", response_model=schemas.IngestResult)
@@ -235,7 +271,7 @@ def ingest_redfin_url(
     except ScrapeBlocked as e:
         raise HTTPException(502, f"Could not scrape Redfin ({e}); add manually.")
     listing.source_url = listing.source_url or payload.url
-    return _ingest_one(db, "redfin", listing, download_photos)
+    return _ingest_one(db, "redfin", listing, download_photos, origin="url")
 
 
 @router.post("/zillow/search", response_model=schemas.IngestResult)
@@ -269,7 +305,7 @@ def ingest_zillow_search(
     out = schemas.IngestResult()
     for raw in results:
         try:
-            prop, created = _upsert(db, "zillow", normalize(raw), download_photos)
+            prop, created = _upsert(db, "zillow", normalize(raw), download_photos, origin="zillow_search")
             out.property_ids.append(prop.id)
             if created:
                 out.created += 1
@@ -310,7 +346,7 @@ def ingest_realtor_search(
     out = schemas.IngestResult()
     for listing in listings:
         try:
-            prop, created = _upsert(db, "realtor", listing, download_photos)
+            prop, created = _upsert(db, "realtor", listing, download_photos, origin="realtor_search")
             out.property_ids.append(prop.id)
             if created:
                 out.created += 1
@@ -339,6 +375,57 @@ def _to_shape(s: schemas.RegionShape) -> geo.Shape:
     raise HTTPException(400, f"unknown shape kind: {s.kind}")
 
 
+def _enabled_sources(requested: list[str]) -> list[str]:
+    """Sources to query = requested ∩ available (or all available if none given).
+    Realtor is available when enabled; Zillow only when a RapidAPI key is set."""
+    available = []
+    if settings.realtor_enabled:
+        available.append("realtor")
+    if settings.rapidapi_key:
+        available.append("zillow")
+    return [s for s in requested if s in available] if requested else available
+
+
+_ZILLOW_STATUS = {"for_sale": "ForSale", "pending": "ForSale", "sold": "RecentlySold"}
+
+
+def _search_city(source: str, city: str, crit, listing_type: str) -> list[NormalizedListing]:
+    """Query one source for a city with the shared criteria → normalized listings."""
+    if source == "realtor":
+        return realtor.search(
+            city, listing_type=listing_type,
+            beds_min=crit.beds_min, baths_min=crit.baths_min,
+            price_min=crit.price_min, price_max=crit.price_max,
+            sqft_min=crit.sqft_min, sqft_max=crit.sqft_max,
+        )
+    if source == "zillow":
+        client = ZillowClient()
+        params: dict = {"location": city, "status_type": _ZILLOW_STATUS.get(listing_type, "ForSale")}
+        if crit.price_min:
+            params["minPrice"] = crit.price_min
+        if crit.price_max:
+            params["maxPrice"] = crit.price_max
+        if crit.beds_min:
+            params["bedsMin"] = crit.beds_min
+        if crit.home_type:
+            params["home_type"] = crit.home_type
+        return [normalize(r) for r in client.search(**params)]
+    return []
+
+
+def _find_existing(db: Session, source: str, listing: NormalizedListing) -> Optional[Property]:
+    """The existing property for this listing (same-source link or cross-source dup)."""
+    if listing.source_id:
+        link = (
+            db.query(PropertySource)
+            .filter(PropertySource.source == source, PropertySource.source_id == listing.source_id)
+            .first()
+        )
+        if link:
+            return link.property
+    return dedup.find_matching_property(db, listing)
+
+
 @router.post("/region", response_model=schemas.IngestResult)
 def ingest_region(
     payload: schemas.RegionSearchIngest,
@@ -350,10 +437,11 @@ def ingest_region(
     Bridges the drawn shape to area searches: ZIP centroids inside the shape →
     unique cities (capped) → Realtor.com search each → filter the results to the
     points actually inside the shape → upsert. Keyless (Realtor/HomeHarvest)."""
-    if not settings.realtor_enabled:
-        raise HTTPException(503, "Realtor ingestion is disabled (REALTOR_ENABLED=false)")
     if not payload.shapes:
         raise HTTPException(400, "draw at least one region")
+    sources = _enabled_sources(payload.sources)
+    if not sources:
+        raise HTTPException(503, "No search sources available (enable Realtor or set RAPIDAPI_KEY).")
 
     shapes = [_to_shape(s) for s in payload.shapes]
 
@@ -375,26 +463,22 @@ def ingest_region(
         out.errors.append("No US ZIP centroids fall inside the region(s) drawn.")
         return out
 
-    # Search each city once; dedupe listings by source_id across cities.
-    listings: dict = {}
-    for city in cities:
-        try:
-            for listing in realtor.search(
-                city,
-                listing_type=payload.listing_type,
-                beds_min=payload.beds_min,
-                price_min=payload.price_min,
-                price_max=payload.price_max,
-            ):
-                key = listing.source_id or f"{listing.address}|{listing.zip}"
-                listings.setdefault(key, listing)
-        except RealtorUnavailable as e:
-            raise HTTPException(503, str(e))
-        except Exception as e:  # one bad city shouldn't sink the batch
-            out.errors.append(f"{city}: {str(e)[:120]}")
+    # Query every enabled source per city; dedupe within-source by id/address.
+    # (Cross-source duplicates are merged onto one property at upsert time.)
+    found: dict = {}
+    for source in sources:
+        for city in cities:
+            try:
+                for listing in _search_city(source, city, payload, payload.listing_type):
+                    key = f"{source}:{listing.source_id or listing.address}|{listing.zip}"
+                    found.setdefault(key, (source, listing))
+            except (RealtorUnavailable, ZillowUnavailable) as e:
+                out.errors.append(f"{source}/{city}: {str(e)[:100]}")
+            except Exception as e:  # one bad city shouldn't sink the batch
+                out.errors.append(f"{source}/{city}: {str(e)[:100]}")
 
     # Keep only listings whose coordinates fall inside one of the drawn shapes.
-    for listing in listings.values():
+    for source, listing in found.values():
         if listing.latitude is None or listing.longitude is None:
             out.skipped += 1
             continue
@@ -405,7 +489,7 @@ def ingest_region(
             # Savepoint per listing: a bad row rolls back just itself and leaves
             # the session usable, instead of poisoning the whole batch.
             with db.begin_nested():
-                prop, created = _upsert(db, "realtor", listing, download=False)
+                prop, created = _upsert(db, source, listing, download=False, origin="region_search")
             out.property_ids.append(prop.id)
             out.created += int(created)
             out.updated += int(not created)
@@ -417,6 +501,111 @@ def ingest_region(
         out.errors.append(
             f"Region covers more than {payload.max_cities} areas; searched the "
             "closest/first ones. Draw smaller regions for full coverage."
+        )
+    return out
+
+
+@router.post("/refresh", response_model=schemas.IngestResult)
+def ingest_refresh(
+    payload: schemas.RefreshIngest,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    """The "Update" button: find newly-listed properties within the search
+    region(s) and refresh the status/details of existing properties (keyless,
+    via Realtor.com).
+
+    One city-search pass covers both: cities inside the search regions (to find
+    new for-sale listings) plus the cities of existing properties (to detect
+    for_sale → pending/sold transitions). Existing properties are matched by
+    source_id and updated in place; new listings are only created when they fall
+    inside a search region, so the DB isn't flooded with a whole city."""
+    sources = _enabled_sources(payload.sources)
+    if not sources:
+        raise HTTPException(503, "No search sources available (enable Realtor or set RAPIDAPI_KEY).")
+
+    region_shapes = [_to_shape(s) for s in payload.search_regions]
+
+    existing = db.query(Property).filter(Property.archived.is_(False)).all()
+
+    # Cities: inside the search regions (new) + those of existing props (status
+    # refresh), deduped and capped.
+    cities: list[str] = []
+    seen: set[str] = set()
+    capped = False
+    for shp in region_shapes:
+        cs, cap = geo.cities_in_shape(shp, max_cities=payload.max_cities)
+        capped = capped or cap
+        for c in cs:
+            if c not in seen:
+                seen.add(c)
+                cities.append(c)
+    if payload.refresh_existing:
+        for p in existing:
+            if p.city and p.state:
+                c = f"{p.city}, {p.state}"
+                if c not in seen:
+                    seen.add(c)
+                    cities.append(c)
+    if len(cities) > payload.max_cities:
+        capped = True
+        cities = cities[: payload.max_cities]
+
+    out = schemas.IngestResult()
+    # Search these statuses so for_sale → pending/sold transitions are visible.
+    statuses = (
+        ["for_sale", "pending", "sold"] if payload.refresh_existing
+        else [payload.listing_type]
+    )
+    processed: set[str] = set()
+
+    for source in sources:
+        for city in cities:
+            for lt in statuses:
+                try:
+                    listings = _search_city(source, city, payload, lt)
+                except (RealtorUnavailable, ZillowUnavailable) as e:
+                    out.errors.append(f"{source}/{city}/{lt}: {str(e)[:80]}")
+                    continue
+                except Exception as e:
+                    out.errors.append(f"{source}/{city}/{lt}: {str(e)[:80]}")
+                    continue
+                for listing in listings:
+                    pkey = f"{source}:{listing.source_id or listing.address}"
+                    if pkey in processed:
+                        continue
+                    match = _find_existing(db, source, listing)
+                    in_region = (
+                        bool(region_shapes)
+                        and listing.latitude is not None
+                        and any(geo.contains(s, listing.latitude, listing.longitude) for s in region_shapes)
+                    )
+                    # Refresh existing anywhere; create new only inside a region.
+                    if not match and not (in_region and lt == "for_sale"):
+                        continue
+                    processed.add(pkey)
+                    prev_status = match.status if match else None
+                    try:
+                        with db.begin_nested():
+                            prop, created = _upsert(
+                                db, source, listing, download=False, origin="region_search"
+                            )
+                    except Exception as e:
+                        out.errors.append(str(e)[:100])
+                        continue
+                    if created:
+                        out.created += 1
+                        out.property_ids.append(prop.id)
+                    else:
+                        out.updated += 1
+                        if prev_status is not None and prop.status != prev_status:
+                            out.status_changed += 1
+    db.commit()
+
+    if capped:
+        out.errors.append(
+            f"Searched up to {payload.max_cities} areas; some regions/cities may "
+            "be uncovered. Narrow the search regions for full coverage."
         )
     return out
 
@@ -437,7 +626,7 @@ def ingest_redfin_csv(
             raw=row.raw,
         )
         try:
-            prop, created = _upsert(db, "redfin", listing, download=False)
+            prop, created = _upsert(db, "redfin", listing, download=False, origin="redfin_csv")
             out.property_ids.append(prop.id)
             if created:
                 out.created += 1

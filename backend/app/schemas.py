@@ -142,6 +142,7 @@ class PropertyOut(PropertyBase):
     model_config = ConfigDict(from_attributes=True)
     id: int
     source: str
+    origin: Optional[str] = None  # how it entered the app (provenance)
     source_url: Optional[str] = None
     source_id: Optional[str] = None
     archived: bool
@@ -156,6 +157,16 @@ class PropertyOut(PropertyBase):
     overall_score: Optional[float] = None
 
 
+class PropertySourceOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    source: str
+    source_id: Optional[str] = None
+    source_url: Optional[str] = None
+    origin: Optional[str] = None
+    last_synced_at: Optional[datetime] = None
+
+
 class PropertyDetailOut(PropertyOut):
     """Property plus its child collections, for the detail page."""
 
@@ -163,6 +174,7 @@ class PropertyDetailOut(PropertyOut):
     notes: List[NoteOut] = []
     media: List[MediaOut] = []
     status_history: List[StatusHistoryOut] = []
+    sources: List[PropertySourceOut] = []
 
 
 # ── Flexible criteria ────────────────────────────────────────────────────────
@@ -304,21 +316,41 @@ class RegionShape(BaseModel):
     points: Optional[List[List[float]]] = None # polygon: [[lat,lng], ...]
 
 
-class RegionSearchIngest(BaseModel):
+class SearchCriteria(BaseModel):
+    """Shared search criteria that map across sources (Realtor, Zillow)."""
+
+    listing_type: str = "for_sale"
+    beds_min: Optional[int] = None
+    baths_min: Optional[float] = None
+    price_min: Optional[int] = None
+    price_max: Optional[int] = None
+    sqft_min: Optional[int] = None
+    sqft_max: Optional[int] = None
+    home_type: Optional[str] = None
+    sources: List[str] = []  # empty = all available (realtor + zillow if keyed)
+    max_cities: int = 15  # cap area-searches to bound cost
+
+
+class RegionSearchIngest(SearchCriteria):
     """Search the listing source(s) within map-drawn region(s)."""
 
     shapes: List[RegionShape]
-    listing_type: str = "for_sale"
-    beds_min: Optional[int] = None
-    price_min: Optional[int] = None
-    price_max: Optional[int] = None
-    max_cities: int = 15  # cap area-searches to bound cost
+
+
+class RefreshIngest(SearchCriteria):
+    """Update the property set: find new listings in the search region(s) and
+    refresh the status of existing properties."""
+
+    search_regions: List[RegionShape] = []
+    refresh_existing: bool = True
+    max_cities: int = 20
 
 
 class IngestResult(BaseModel):
     created: int = 0
     updated: int = 0
     skipped: int = 0
+    status_changed: int = 0
     property_ids: List[int] = []
     errors: List[str] = []
     raw_available: bool = True

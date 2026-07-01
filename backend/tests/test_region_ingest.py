@@ -39,6 +39,7 @@ def test_region_search_filters_to_shape(client, monkeypatch):
     detail = client.get(f"/properties/{pid}").json()
     assert detail["source"] == "realtor"
     assert detail["address"] == "R1 Main St"
+    assert detail["origin"] == "region_search"
 
 
 def test_region_dedupes_cities_and_listings(client, monkeypatch):
@@ -72,6 +73,43 @@ def test_region_no_cities_returns_empty_result(client, monkeypatch):
     assert r.status_code == 200
     assert r.json()["created"] == 0
     assert any("No US ZIP" in e for e in r.json()["errors"])
+
+
+def test_refresh_updates_status_and_finds_new(client, db_session, monkeypatch):
+    """/ingest/refresh: refresh an existing property's status (for_sale→pending)
+    and add a new for-sale listing found inside a search region."""
+    from app.models import Property
+    from app.services import realtor as realtor_mod
+
+    # An existing tracked property, currently for_sale.
+    db_session.add(Property(
+        source="realtor", source_id="R1", origin="region_search", status="for_sale",
+        city="Santa Rosa", state="CA", latitude=38.45, longitude=-122.70, price=900000,
+    ))
+    db_session.commit()
+
+    monkeypatch.setattr(geo, "cities_in_shape", lambda shape, max_cities=20: (["Santa Rosa, CA"], False))
+
+    def fake_search(city, listing_type="for_sale", **k):
+        if listing_type == "pending":   # R1 has gone pending
+            l = _listing("R1", 38.45, -122.70, price=910000)
+            l.status = "pending"
+            return [l]
+        if listing_type == "for_sale":  # a brand-new listing in the region
+            return [_listing("R2", 38.46, -122.71, price=800000)]
+        return []
+    monkeypatch.setattr(realtor_mod, "search", fake_search)
+
+    circle = {"kind": "circle", "center": [38.44, -122.71], "radius_mi": 10}
+    r = client.post("/ingest/refresh", json={"search_regions": [circle], "refresh_existing": True})
+    assert r.status_code == 200, r.text
+    res = r.json()
+    assert res["status_changed"] == 1   # R1 for_sale → pending
+    assert res["created"] == 1          # R2 newly found in region
+
+    r1 = db_session.query(Property).filter_by(source_id="R1").first()
+    assert r1.status == "pending"
+    assert r1.origin == "region_search"  # provenance unchanged by refresh
 
 
 def test_region_invalid_shape_rejected(client):

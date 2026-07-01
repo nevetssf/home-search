@@ -68,6 +68,14 @@ def test_filter_by_tag(client, make_property):
     assert r.json()[0]["id"] == p1["id"]
 
 
+def test_manual_create_records_origin(client, make_property):
+    prop = make_property()
+    detail = client.get(f"/properties/{prop['id']}").json()
+    assert detail["origin"] == "manual"
+    # every property carries at least its own source link
+    assert any(s["source"] == "manual" for s in detail["sources"])
+
+
 def test_edit_and_delete_note(client, make_property):
     prop = make_property()
     note = client.post(f"/properties/{prop['id']}/notes", json={"body": "first"}).json()
