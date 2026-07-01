@@ -111,6 +111,9 @@ export const ingestRealtorSearch = (params) =>
 // Search the listing source within map-drawn region(s). shapes: [{kind, ...}].
 export const searchRegion = (shapes, opts = {}) =>
   api.post('/ingest/region', { shapes, ...opts }).then((r) => r.data)
+// "Update": find new listings in the search regions + refresh existing statuses.
+export const refreshListings = (searchRegions = [], criteria = {}) =>
+  api.post('/ingest/refresh', { search_regions: searchRegions, refresh_existing: true, ...criteria }).then((r) => r.data)
 
 // ── Filter sets (named, persisted filter criteria) ────────────────────────────
 export const listFilterSets = () => api.get('/filter-sets').then((r) => r.data)

@@ -6,6 +6,7 @@ import {
 } from '../api'
 import CriteriaPanel from '../components/CriteriaPanel'
 import MediaGallery from '../components/MediaGallery'
+import { originLabel } from '../filters'
 
 const STATUSES = ['for_sale', 'pending', 'sold', 'off_market', 'coming_soon']
 const fmtPrice = (p) => (p == null ? '—' : `$${Number(p).toLocaleString()}`)
@@ -76,13 +77,19 @@ export default function Detail() {
           <select value={p.status} onChange={(e) => changeStatus(e.target.value)}>
             {STATUSES.map((s) => <option key={s} value={s}>{s.replace('_', ' ')}</option>)}
           </select>
-          {p.source_url && <a href={p.source_url} target="_blank" rel="noreferrer" className="ext">source ↗</a>}
+          {(p.sources || []).filter((s) => s.source_url).map((s) => (
+            <a key={s.id} href={s.source_url} target="_blank" rel="noreferrer" className="ext">
+              {s.source} ↗
+            </a>
+          ))}
           <button className="link-btn danger" onClick={remove}>Delete</button>
         </div>
       </div>
       <p className="muted">
         {p.city}{p.state ? `, ${p.state}` : ''} · {fmtPrice(p.price)} ·
-        {' '}{p.beds ?? '—'} bd / {p.baths ?? '—'} ba · source: {p.source}
+        {' '}{p.beds ?? '—'} bd / {p.baths ?? '—'} ba ·
+        {' '}listed on {(p.sources || []).map((s) => s.source).join(', ') || p.source} ·
+        {' '}added via {originLabel(p.origin)}
       </p>
 
       <div className="detail-grid">

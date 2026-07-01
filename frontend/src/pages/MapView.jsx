@@ -124,7 +124,7 @@ function FitBounds({ points }) {
 }
 
 export default function MapView() {
-  const { search, setSearch, mapFade, setMapFade } = useViewState()
+  const { search, setSearch, mapFade, setMapFade, searchCriteria, dataVersion } = useViewState()
   const {
     valueFilters, setValueFilters, filterRegions: filter, setFilterRegions: setFilter,
   } = useFilterSets()
@@ -141,7 +141,7 @@ export default function MapView() {
     () => listProperties({ with_criteria: true }).then(setRows).catch(() => {}),
     []
   )
-  useEffect(() => { load() }, [load])
+  useEffect(() => { load() }, [load, dataVersion])
 
   // Same match rule as the List view: passes value filters AND filter regions.
   const passes = useMemo(
@@ -164,7 +164,7 @@ export default function MapView() {
     setSearching(true)
     setMsg('Searching Realtor.com within the search region(s)…')
     try {
-      const res = await searchRegion(search)
+      const res = await searchRegion(search, searchCriteria || {})
       const capped = (res.errors || []).find((e) => e.includes('smaller regions'))
       const bits = [`added ${res.created} new`, `${res.updated} updated`]
       if (res.skipped) bits.push(`${res.skipped} outside region`)

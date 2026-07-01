@@ -101,6 +101,22 @@ button { cursor: pointer; }
 .filter-field { display: flex; flex-direction: column; gap: 2px; font-size: 0.8em; color: var(--muted); }
 .filter-field input { padding: 4px 6px; }
 
+/* ── Search button + modal ── */
+.search-btn { padding: 5px 12px; border: 1px solid var(--accent); color: var(--accent); background: var(--card); border-radius: 6px; font-weight: 600; }
+.modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.35); display: flex; align-items: flex-start; justify-content: center; z-index: 1000; padding: 6vh 16px; }
+.modal { background: var(--card); border-radius: 10px; padding: 20px; width: 560px; max-width: 100%; max-height: 88vh; overflow: auto; box-shadow: 0 10px 40px rgba(0,0,0,0.2); }
+.modal-head { display: flex; justify-content: space-between; align-items: center; }
+.modal-head h3 { margin: 0; }
+.modal h4 { margin: 16px 0 6px; color: var(--muted); font-size: 0.85em; text-transform: uppercase; }
+.search-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.search-row { display: flex; gap: 10px; flex-wrap: wrap; }
+.search-field { display: flex; flex-direction: column; gap: 3px; font-size: 0.85em; color: var(--muted); }
+.search-field.wide { flex: 1; min-width: 220px; }
+.search-field input, .search-field select { padding: 6px; }
+.muted.small { font-size: 0.8em; }
+.modal-foot { display: flex; align-items: center; gap: 10px; margin-top: 20px; }
+.modal-foot .primary { background: var(--accent); color: #fff; border: none; padding: 8px 18px; border-radius: 6px; }
+
 /* ── Filter-set picker ── */
 .filterset-picker { display: inline-flex; align-items: center; gap: 6px; }
 .filterset-picker select { padding: 4px 6px; }

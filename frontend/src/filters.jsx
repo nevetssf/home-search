@@ -5,6 +5,17 @@
 import { useEffect, useMemo, useState } from 'react'
 import { listCriteria } from './api'
 
+// Human-readable labels for a property's provenance (Property.origin).
+export const ORIGIN_LABELS = {
+  manual: 'Manual',
+  url: 'URL',
+  realtor_search: 'Realtor search',
+  region_search: 'Region search',
+  zillow_search: 'Zillow search',
+  redfin_csv: 'Redfin CSV',
+}
+export const originLabel = (o) => ORIGIN_LABELS[o] || o || '—'
+
 // Numeric columns understand >, <, >=, <=, = prefixes; bool matches yes/no;
 // everything else is a case-insensitive substring match on the displayed value.
 export function matchesFilter(value, filter, type) {
@@ -66,6 +77,7 @@ export function useFilterColumns() {
       { key: 'lot_size', label: 'Lot (ac)', type: 'number', get: (p) => p.lot_size },
       { key: 'status', label: 'Status', type: 'text', get: (p) => p.status },
       { key: 'tags', label: 'Tags', type: 'text', get: (p) => (p.tags || []).map((t) => t.name).join(', ') },
+      { key: 'origin', label: 'From', type: 'text', get: (p) => originLabel(p.origin) },
     ]
     const crit = criteria.map((c) => ({
       key: `crit:${c.id}`,

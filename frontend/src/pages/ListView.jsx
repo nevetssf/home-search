@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { deleteProperty, listProperties } from '../api'
+import { deleteProperty, listProperties, refreshListings } from '../api'
 import AddPropertyBar from '../components/AddPropertyBar'
 import FilterSetPicker from '../components/FilterSetPicker'
 import { useViewState } from '../regions'
@@ -36,7 +36,9 @@ function renderCell(col, p) {
 export default function ListView() {
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
-  const { sort, setSort, listFade, setListFade } = useViewState()
+  const { sort, setSort, listFade, setListFade, search: searchRegions, searchCriteria, dataVersion } = useViewState()
+  const [updating, setUpdating] = useState(false)
+  const [updateMsg, setUpdateMsg] = useState('')
   const {
     valueFilters, setValueFilters, filterRegions, setFilterRegions,
   } = useFilterSets()
@@ -48,13 +50,29 @@ export default function ListView() {
       .then(setRows)
       .finally(() => setLoading(false))
   }
-  useEffect(load, [])
+  useEffect(load, [dataVersion])
 
   const remove = async (p, e) => {
     e.preventDefault(); e.stopPropagation()
     if (!confirm(`Delete ${p.address || `property #${p.id}`} permanently? This cannot be undone.`)) return
     await deleteProperty(p.id)
     load()
+  }
+
+  const update = async () => {
+    setUpdating(true)
+    setUpdateMsg('Updating — searching for new listings and refreshing statuses…')
+    try {
+      const res = await refreshListings(searchRegions || [], searchCriteria || {})
+      const bits = [`${res.created} new`, `${res.updated} updated`]
+      if (res.status_changed) bits.push(`${res.status_changed} status changes`)
+      setUpdateMsg(`Done: ${bits.join(', ')}.`)
+      load()
+    } catch (e) {
+      setUpdateMsg(e.response?.status === 503 ? 'Update unavailable (Realtor disabled).' : 'Update failed.')
+    } finally {
+      setUpdating(false)
+    }
   }
 
   // A property "matches" if it passes the value filters AND the spatial filter
@@ -84,6 +102,11 @@ export default function ListView() {
       <AddPropertyBar onChange={load} />
       <div className="list-toolbar">
         <FilterSetPicker />
+        <button onClick={update} disabled={updating}
+          title="Find new listings in your map search regions and refresh existing statuses">
+          {updating ? 'Updating…' : 'Update'}
+        </button>
+        {updateMsg && <span className="muted">{updateMsg}</span>}
         <span className="muted">
           {filtersActive ? `${matchCount} of ${rows.length} match` : `${rows.length} properties`}
         </span>

@@ -1,8 +1,11 @@
+import { useState } from 'react'
 import { NavLink, Outlet } from 'react-router-dom'
 import { useAuth } from './auth'
+import SearchModal from './components/SearchModal'
 
 export default function App() {
   const { user, signOut } = useAuth()
+  const [searchOpen, setSearchOpen] = useState(false)
   return (
     <div className="app">
       <header className="topbar">
@@ -13,6 +16,7 @@ export default function App() {
           <NavLink to="/criteria">Criteria</NavLink>
           <NavLink to="/settings">Settings</NavLink>
         </nav>
+        <button className="search-btn" onClick={() => setSearchOpen(true)}>⌕ Search</button>
         <span className="spacer" />
         <NavLink to="/settings" className="who">{user?.name}</NavLink>
         <button className="link-btn" onClick={signOut}>Sign out</button>
@@ -20,6 +24,7 @@ export default function App() {
       <main className="content">
         <Outlet />
       </main>
+      {searchOpen && <SearchModal onClose={() => setSearchOpen(false)} />}
     </div>
   )
 }
